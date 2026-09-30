@@ -1,0 +1,196 @@
+name: build-packages
+
+# 两个包都是 Architecture: all（纯 shell + JS + JSON，没有 C 代码），
+# 所以只需要 SDK 的打包能力，不需要编译工具链 —— 一轮几分钟就能出包。
+#
+#   ipk  → OpenWrt/ImmortalWrt 24.10 及更早（opkg）
+#   apk  → OpenWrt/ImmortalWrt 25.12 及更新（apk-tools 3）
+#
+# 版本号按时间（Asia/Shanghai），每次提交出一个 Release。
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-packages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.release }} → ${{ matrix.fmt }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - release: "24.10.5"
+            fmt: ipk
+          - release: "25.12.2"
+            fmt: apk
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装宿主依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential clang flex bison g++ gawk gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools python3-venv \
+            rsync unzip wget zstd file
+
+      - name: 找到 SDK
+        id: sdk
+        run: |
+          set -e
+          BASE="https://downloads.immortalwrt.org/releases/${{ matrix.release }}/targets/mediatek/filogic/"
+          FILE=$(curl -fsSL "$BASE" | grep -oE 'immortalwrt-sdk-[^"<>]*Linux-x86_64\.tar\.(zst|xz)' | head -1)
+          if [ -z "$FILE" ]; then
+            echo "::error::$BASE 里没找到 SDK"
+            exit 1
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          echo "SDK = $FILE"
+
+      - name: 缓存 SDK + feeds
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/sdk
+            .cache/feeds
+          key: immwrt-${{ matrix.release }}-${{ steps.sdk.outputs.file }}
+
+      - name: 下载 SDK
+        run: |
+          set -e
+          mkdir -p .cache/sdk
+          F=".cache/sdk/${{ steps.sdk.outputs.file }}"
+          if [ -f "$F" ]; then
+            echo "命中缓存：$F"
+          else
+            curl -fL --retry 3 --retry-all-errors --max-time 900 -o "$F" "${{ steps.sdk.outputs.base }}${{ steps.sdk.outputs.file }}"
+          fi
+          ls -la .cache/sdk
+
+      - name: 解包 SDK
+        run: |
+          set -e
+          mkdir -p work
+          tar -xf ".cache/sdk/${{ steps.sdk.outputs.file }}" -C work --strip-components=1
+          echo "--- SDK 内容 ---"
+          ls work
+
+      - name: 恢复 feeds 缓存
+        run: |
+          if [ -d .cache/feeds ]; then
+            cp -a .cache/feeds work/feeds
+            echo "feeds 命中缓存"
+          else
+            echo "feeds 冷启动"
+          fi
+
+      - name: 更新并安装 feeds
+        working-directory: work
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 把构建时间写进包版本
+        run: |
+          D="$(TZ=Asia/Shanghai date +%Y%m%d%H%M)"
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$D/" \
+            luci-app-openfi-modem/Makefile luci-app-openfi-fan/Makefile
+          grep -H -E '^PKG_(NAME|VERSION|RELEASE)' luci-app-openfi-*/Makefile
+
+      - name: 放入我们的包
+        run: |
+          cp -a luci-app-openfi-modem luci-app-openfi-fan work/package/
+          ls -d work/package/luci-app-openfi-*
+
+      - name: 选包
+        working-directory: work
+        run: |
+          cat >> .config <<'EOF'
+          CONFIG_PACKAGE_luci-app-openfi-modem=m
+          CONFIG_PACKAGE_luci-app-openfi-fan=m
+          EOF
+          make defconfig
+
+      - name: 编译
+        working-directory: work
+        run: |
+          make -j"$(nproc)" package/luci-app-openfi-modem/compile V=s
+          make -j"$(nproc)" package/luci-app-openfi-fan/compile V=s
+
+      - name: 收集产物
+        run: |
+          set -e
+          mkdir -p dist
+          find work/bin/packages -type f -name 'luci-app-openfi-*' -exec cp -v {} dist/ \;
+          echo "--- 产物 ---"
+          ls -la dist
+          test -n "$(ls -A dist)"
+
+      - name: 保存 feeds 缓存
+        if: always()
+        run: |
+          rm -rf .cache/feeds
+          cp -a work/feeds .cache/feeds 2>/dev/null || true
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkgs-${{ matrix.fmt }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: 发布（按时间）
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 版本号（Asia/Shanghai）
+        id: ver
+        run: |
+          TAG="v$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "版本号：$TAG"
+
+      - name: 生成 MD5
+        run: |
+          cd dist
+          md5sum * | tee MD5SUMS.txt
+          echo "--- 文件清单 ---"
+          ls -la
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: OpenFi 6C packages ${{ steps.ver.outputs.tag }}
+          body: |
+            OpenFi 6C 的两个 LuCI 包，一次出两种包格式：
+
+            | 文件后缀 | 适用固件 | 包管理器 | 装法 |
+            | --- | --- | --- | --- |
+            | `.ipk` | OpenWrt / ImmortalWrt **24.10 及更早** | opkg | `opkg install ./xxx.ipk` |
+            | `.apk` | OpenWrt / ImmortalWrt **25.12 及更新** | apk-tools 3 | `apk add --allow-untrusted ./xxx.apk` |
+
+            - **`luci-app-openfi-modem`** —— 移动网络：模组信息与卡槽 / 信号与流量 / AT 终端
+            - **`luci-app-openfi-fan`** —— 散热与灯光：风扇控制 / 状态灯
+
+            两个包都是 `Architecture: all`，跟 CPU 架构无关，装完刷新 LuCI 即可看到菜单。
+            各文件的 MD5 见 `MD5SUMS.txt`。
+          files: dist/*
+          generate_release_notes: true
