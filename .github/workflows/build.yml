@@ -98,7 +98,19 @@ jobs:
       - name: 更新并安装 feeds
         working-directory: work
         run: |
-          ./scripts/feeds update -a
+          # 缓存回来的 feeds 停在 detached HEAD —— base feed 指向 immortalwrt 主仓，
+          # 而 feeds update 内部是 git pull，在 detached HEAD 上会报
+          # "You are not currently on a branch" 然后 failed（第二轮就是这么挂的）。
+          #
+          # 索引文件 feeds/*.index 在，就说明缓存完整，直接用、跳过 update。
+          # 这是安全的：SDK 版本本身把各 feed 钉在具体提交上，而缓存 key 里绑了
+          # SDK 文件名 —— 上游发新 SDK 时缓存自动失效重来。
+          if ls feeds/*.index >/dev/null 2>&1; then
+            echo "feeds 命中缓存（索引已在），跳过 update"
+          else
+            echo "feeds 冷启动，执行 update"
+            ./scripts/feeds update -a
+          fi
           ./scripts/feeds install -a
 
       - name: 把构建时间写进包版本
