@@ -18,6 +18,7 @@ PKG_RELEASE:=1
 
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=OpenFi 6C community port
+LUCI_MAINTAINER:=OpenFi 6C community port
 
 LUCI_TITLE:=LuCI app for OpenFi 6C 5G modem info and SIM slot switch
 LUCI_DEPENDS:=+kmod-usb-serial-option +kmod-usb-serial-wwan +jsonfilter
