@@ -1,0 +1,75 @@
+name: cache-keepalive
+
+# GitHub Actions 的缓存闲置 7 天就会被回收。
+# build.yml 里的 SDK 缓存(oncall 589 MB)和 feeds 缓存一旦被回收，
+# 下次出包就要重新下载并解包 SDK —— 这个工作流专门防止那件事。
+#
+# 它只做一件事：用与 build.yml **完全相同**的 key 去 restore 一遍缓存。
+# 缓存被访问 → 7 天计时器重置。不编译、不发版、不碰 releases。
+#
+# 注意：如果仓库连续 60 天没有任何提交，GitHub 会自动停掉定时工作流；
+# 到时候随便推一次提交即可恢复（也需要顺手手动跑一次本工作流续期）。
+
+on:
+  schedule:
+    # 每 3 天一次（UTC 18:00）。7 天的有效期留了两次容错的余量，
+    # 即使 GitHub 因负载跳过一两次也不会让缓存过期。
+    - cron: '0 18 */3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    name: 续期 ${{ matrix.release }} 缓存
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ["24.10.5", "25.12.2"]
+
+    steps:
+      # key 必须和 build.yml 里逐字符一致，否则命中不了、也就续不了期。
+      - name: 找到 SDK 文件名（与 build.yml 同逻辑）
+        id: sdk
+        run: |
+          set -e
+          BASE="https://downloads.immortalwrt.org/releases/${{ matrix.release }}/targets/mediatek/filogic/"
+          FILE=$(curl -fsSL "$BASE" | grep -oE 'immortalwrt-sdk-[^"<>]*Linux-x86_64\.tar\.(zst|xz)' | head -1)
+          if [ -z "$FILE" ]; then
+            echo "::error::$BASE 里没找到 SDK"
+            exit 1
+          fi
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          echo "目标 key: immwrt-${{ matrix.release }}-$FILE"
+
+      # 用 restore 而不是 lookup-only：真实读取一次缓存才能确保刷新访问时间。
+      # restore-keys 兜底，这样即使上游换了 SDK 文件名（key 变了），
+      # 也能把仍在有效期内的旧缓存续上。
+      - name: 读取缓存（读取即续期）
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .cache/sdk
+            .cache/feeds
+          key: immwrt-${{ matrix.release }}-${{ steps.sdk.outputs.file }}
+          restore-keys: |
+            immwrt-${{ matrix.release }}-
+
+      - name: 结果
+        run: |
+          echo "命中 key: ${{ steps.restore.outputs.cache-matched-key || '(无)' }}"
+          echo "--- SDK ---"
+          ls -la .cache/sdk 2>/dev/null || echo "SDK 缓存未命中"
+          echo "--- feeds ---"
+          du -sh .cache/feeds 2>/dev/null || echo "feeds 缓存未命中"
+          if [ -z "${{ steps.restore.outputs.cache-matched-key }}" ]; then
+            echo "::warning::没命中任何缓存，下次出包会冷启动（需要重新下载 SDK）"
+          fi
