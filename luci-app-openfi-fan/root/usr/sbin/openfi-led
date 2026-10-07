@@ -11,7 +11,12 @@
 # 每盏灯独立设置：
 #   on     常亮（trigger=none, brightness=1）
 #   off    常灭（trigger=none, brightness=0）
+#   auto   跟随 WAN 连通性：通 = 常亮，不通 / 还没测出来 = 闪烁
 #   keep   不干预：完全不动它，交回内核或其它程序（例如 /etc/config/system 里的 led 段）
+#
+# auto 依赖 openfi-wancheck 写的 /var/run/openfi-wan.state。
+# 用它的理由：usb0 是模组 USB 栈的一部分，没插卡时照样有 IP 和默认路由，
+# 只看接口状态这盏灯永远亮着、等于废了。详见 openfi-wancheck 顶部注释。
 #
 # 总开关 openfi.led.enabled=0 → 四盏灯全部熄灭（夜间模式）。
 #
@@ -21,6 +26,11 @@
 LED_NAMES="system internet wifi modem"
 LEDROOT=${OPENFI_LEDROOT:-/sys/class/leds}
 RUNDIR=${OPENFI_RUNDIR:-/var/run}
+WAN_STATE_FILE=${OPENFI_WAN_STATE:-$RUNDIR/openfi-wan.state}
+
+# auto 模式（跟随 WAN 连通性）的闪烁节奏，毫秒
+BLINK_ON=${OPENFI_BLINK_ON:-1000}
+BLINK_OFF=${OPENFI_BLINK_OFF:-1000}
 
 # 静默模式共用逻辑（缺失时降级为不支持静默；路径可覆盖,便于单元测试）
 OPENFI_SILENT_LIB=${OPENFI_SILENT_LIB:-/usr/lib/openfi-fan/silent.sh}
@@ -40,8 +50,17 @@ num() {
 led_cfg() {
 	v=$(uci -q get "openfi.led.$1" 2>/dev/null)
 	case "$v" in
-		on|off|keep) echo "$v" ;;
+		on|off|keep|auto) echo "$v" ;;
 		*) echo on ;;
+	esac
+}
+
+# WAN 连通性状态（由 openfi-wancheck 写）：up / down / unknown
+wan_state() {
+	s=$(cat "$WAN_STATE_FILE" 2>/dev/null | tr -d ' \n')
+	case "$s" in
+		up|down) echo "$s" ;;
+		*) echo unknown ;;
 	esac
 }
 
@@ -69,6 +88,18 @@ set_one() {
 		off)
 			printf 'none\n' > "$p/trigger" 2>/dev/null
 			printf '0\n'    > "$p/brightness"
+			;;
+		auto)
+			# 跟随 WAN 连通性：通了常亮，其余（不通/还没测出来）闪烁。
+			# 闪烁用内核 timer trigger，不占用户态进程。
+			if [ "$(wan_state)" = "up" ]; then
+				printf 'none\n' > "$p/trigger" 2>/dev/null
+				printf '1\n'    > "$p/brightness"
+			else
+				printf '%s\n' "$BLINK_OFF" > "$p/delay_off" 2>/dev/null
+				printf '%s\n' "$BLINK_ON"  > "$p/delay_on"  2>/dev/null
+				printf 'timer\n' > "$p/trigger" 2>/dev/null
+			fi
 			;;
 		keep)
 			: ;;

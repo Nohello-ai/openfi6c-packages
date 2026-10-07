@@ -28,8 +28,28 @@ config fan 'fan'
 config led 'led'
 	# 灯光总开关：0 = 四盏灯全灭（夜间模式）
 	option enabled '1'
-	# 每盏灯：on 常亮 / off 常灭 / keep 不干预（交回内核或其它程序）
+	# 每盏灯：on 常亮 / off 常灭 / auto 跟随 WAN 连通性 / keep 不干预
+	# internet 默认 auto：通了常亮，不通（或还没测出来）闪烁。
+	# 必须这样——usb0 是模组 USB 栈的一部分，没插卡时照样有 IP 和默认路由，
+	# 写成 on 的话这盏灯永远是亮的，等于废了。
 	option system 'on'
-	option internet 'on'
+	option internet 'auto'
 	option wifi 'on'
 	option modem 'on'
+
+config wan 'wan'
+	# 连通性探测总开关
+	option enabled '1'
+	# 探测间隔（秒）
+	option interval '10'
+	# 连续失败几次判定为不通（10 × 3 = 30 秒）
+	option fail_threshold '3'
+	# 连续成功几次判定为通
+	option ok_threshold '2'
+	# 单次探测超时（秒）
+	option timeout '2'
+	# DNS 查询的目标服务器与域名（主要手段：开销小、很少被整网屏蔽）
+	option dns_server '223.5.5.5'
+	option dns_host 'www.baidu.com'
+	# ICMP 目标（补充手段：部分网络屏蔽 ICMP，所以放在后面）
+	option ping_ip '223.5.5.5'

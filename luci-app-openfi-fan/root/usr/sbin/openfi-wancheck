@@ -1,0 +1,151 @@
+#!/bin/sh
+#
+# OpenFi 6C —— WAN 连通性探测守护进程
+#
+# 解决什么问题：usb0（模组的 RNDIS 网口）是模组 USB 栈的一部分，
+# 跟蜂窝注册无关 —— 没插卡 / 欠费 / 模组假死时，usb0 照样有 IP、
+# 照样有默认路由，LuCI 会显示「WAN 已连接」，但根本出不去。
+# 只看接口状态永远发现不了，必须主动探测。
+#
+# 设计取舍（对齐工业界做法，但保持轻量）：
+#   * 多手段：DNS 查询 与 ICMP 都试，任一成功即视为「通」
+#     —— 有些网络屏蔽 ICMP，只靠 ping 会误判。
+#   * 多目标：DNS 服务器 / ping 目标都可配，默认用国内公共 DNS。
+#   * 防抖：连续 fail_threshold 次失败才判 down，
+#           连续 ok_threshold 次成功才判 up（恢复比失败更保守）。
+#   * 状态变化才通知（调 openfi-led），不刷屏、不反复点灯。
+#
+# 输出：
+#   /var/run/openfi-wan.state   一行单词：up / down / unknown
+#   /var/run/openfi-wan.json    给 LuCI 看的详情
+#
+# 注意：本脚本只探测和写状态，**不重启模组、不动 USB 模式**。
+#
+# 依赖 busybox 的 sh / nslookup / ping / awk / logger。
+
+RUNDIR=${OPENFI_RUNDIR:-/var/run}
+STATE_FILE="$RUNDIR/openfi-wan.state"
+JSON_FILE="$RUNDIR/openfi-wan.json"
+LED_CMD=${OPENFI_LED_CMD:-/usr/sbin/openfi-led}
+
+now() { date +%s; }
+
+uint_range() {
+	case "$1" in ''|*[!0-9]*) return 1;; esac
+	[ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+
+# 从 UCI 读一个整数，越界或缺失用默认值
+opt_int() {
+	v=$(uci -q get "openfi.wan.$1" 2>/dev/null)
+	if uint_range "$v" "$3" "$4"; then echo "$v"; else echo "$2"; fi
+}
+opt_str() {
+	v=$(uci -q get "openfi.wan.$1" 2>/dev/null)
+	case "$v" in '') echo "$2" ;; *) echo "$v" ;; esac
+}
+
+load_config() {
+	enabled=$(uci -q get openfi.wan.enabled 2>/dev/null)
+	case "$enabled" in 0) enabled=0 ;; *) enabled=1 ;; esac
+
+	interval=$(opt_int interval 10 3 300)
+	fail_threshold=$(opt_int fail_threshold 3 1 20)
+	ok_threshold=$(opt_int ok_threshold 2 1 20)
+	dns_server=$(opt_str dns_server 223.5.5.5)
+	dns_host=$(opt_str dns_host www.baidu.com)
+	ping_ip=$(opt_str ping_ip 223.5.5.5)
+	timeout=$(opt_int timeout 2 1 10)
+}
+
+# 探测：返回 0 = 通，非 0 = 不通。记录成功用的手段到 $method
+probe() {
+	method=""
+
+	# ① DNS 查询：开销小、几乎不会被全屏蔽，且 DNS 必须真的走到上游
+	if [ -n "$dns_server" ] && [ -n "$dns_host" ]; then
+		if nslookup "$dns_host" "$dns_server" >/dev/null 2>&1; then
+			method="dns"
+			return 0
+		fi
+	fi
+
+	# ② ICMP：作为补充手段（部分网络屏蔽 ICMP，所以放在后面）
+	if [ -n "$ping_ip" ]; then
+		if ping -W "$timeout" -c 1 "$ping_ip" >/dev/null 2>&1; then
+			method="ping"
+			return 0
+		fi
+	fi
+
+	return 1
+}
+
+write_state() {
+	# $1 = up / down / unknown
+	echo "$1" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+	cat > "$JSON_FILE.tmp" <<EOF
+{"state":"$1","changed":$changed,"checked":$(now),"fail_count":$fail_count,"ok_count":$ok_count,"method":"${method:-none}","dns_server":"$dns_server","dns_host":"$dns_host","ping_ip":"$ping_ip","interval":$interval,"fail_threshold":$fail_threshold,"ok_threshold":$ok_threshold}
+EOF
+	mv "$JSON_FILE.tmp" "$JSON_FILE"
+}
+
+notify_led() {
+	[ -x "$LED_CMD" ] && "$LED_CMD" apply >/dev/null 2>&1
+	logger -t openfi-wancheck "WAN 状态 -> $state (手段 ${method:-none}, 失败连续 $fail_count / 成功连续 $ok_count)"
+}
+
+main() {
+	reload_pending=0
+	trap 'reload_pending=1' HUP
+
+	load_config
+
+	# 恢复上次状态。/var/run 是 tmpfs，重启即清空，不会把上一轮开机的陈旧状态带过来；
+	# 这样 procd respawn 之后不会退回 unknown、白白闪一阵灯。
+	state=$(cat "$STATE_FILE" 2>/dev/null | tr -d ' \n')
+	case "$state" in up|down) ;; *) state="unknown" ;; esac
+
+	fail_count=0
+	ok_count=0
+	changed=0
+	write_state "$state"
+
+	while :; do
+		if [ "$reload_pending" = "1" ]; then
+			reload_pending=0
+			load_config
+		fi
+
+		# disabled 时纯等待，不探测、不改状态
+		if [ "$enabled" = "0" ]; then
+			sleep "$interval"
+			continue
+		fi
+
+		if probe; then
+			ok_count=$((ok_count + 1))
+			fail_count=0
+		else
+			fail_count=$((fail_count + 1))
+			ok_count=0
+		fi
+
+		changed=0
+		if [ "$state" != "up" ] && [ "$ok_count" -ge "$ok_threshold" ]; then
+			state="up"; changed=1
+		elif [ "$state" != "down" ] && [ "$fail_count" -ge "$fail_threshold" ]; then
+			state="down"; changed=1
+		fi
+
+		write_state "$state"
+
+		# 只在状态真的翻转时通知，避免每轮都点灯
+		[ "$changed" = "1" ] && notify_led
+
+		sleep "$interval"
+	done
+}
+
+[ "${1:-}" = --library ] || main "$@"

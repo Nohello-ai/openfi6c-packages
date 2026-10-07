@@ -67,6 +67,68 @@ uci commit openfi
 /etc/init.d/openfi-fan reload
 ```
 
+## WAN 连通性检测
+
+### 为什么需要
+
+`usb0`（模组的 RNDIS 网口）是**模组 USB 栈**的一部分，**跟蜂窝注册无关**。
+没插卡 / 欠费 / 模组假死时：
+
+| 现象 | 实际 |
+|---|---|
+| `usb0` 拿到 `192.168.100.2` | ✅ 照常 |
+| 默认路由存在 | ✅ 照常 |
+| LuCI 显示「WAN 已连接」 | ✅ 照常 |
+| **能上网吗** | ❌ **不能** |
+
+只看接口状态永远发现不了，必须主动探测。
+
+### 探测方式
+
+`/usr/sbin/openfi-wancheck`（常驻，procd 托管，挂了自动拉起）：
+
+| 手段 | 说明 |
+|---|---|
+| **DNS 查询** | 首选。开销小、几乎不会被整网屏蔽，而且请求必须真的走到上游 |
+| **ICMP** | 补充。部分网络屏蔽 ICMP，所以排在后面 |
+
+**两者任一成功即视为「通」** —— 避免单一手段误判。
+
+### 防抖
+
+```
+连续 fail_threshold 次失败 → 判 down（默认 3 次 × 10 秒 = 30 秒）
+连续 ok_threshold  次成功 → 判 up  （默认 2 次 × 10 秒 = 20 秒）
+```
+
+**只有状态真的翻转时才通知 `openfi-led`**，不反复点灯。守护进程被 procd
+respawn 之后会**恢复上次状态**，不会退回 unknown 白闪一阵。
+
+### 输出
+
+```
+/var/run/openfi-wan.state    up / down / unknown
+/var/run/openfi-wan.json     详情（手段、计数、目标、阈值，给 LuCI 用）
+```
+
+### 灯的 auto 模式
+
+`openfi.led.<名字>` 增加第四个取值 **`auto`**：
+
+| 值 | 行为 |
+|---|---|
+| `on` | 常亮 |
+| `off` | 常灭 |
+| **`auto`** | **通 = 常亮；不通 / 还没测出来 = 闪烁**（用内核 timer trigger，不占用户态进程） |
+| `keep` | 不干预 |
+
+出厂配置里 `internet` 默认就是 `auto` —— 否则没网时它照样亮着，这盏灯等于废了。
+旧值 `on` / `off` 语义**完全不变**，已安装用户的配置不受影响。
+
+> 本功能**只做探测和点灯**，不重启模组、不动 USB 模式。
+> 要改模组的 USB 数据模式请直接对 AT 口发指令（注意 `openfi-modem-at` 出于
+> 安全考虑把 `AT+QCFG="usbnet"` 拉黑了，得绕开它）。
+
 ## 控制逻辑
 
 - **四点温度曲线**：`temp1..temp4` → `speed1..speed4`，中间线性插值
@@ -127,10 +189,20 @@ config fan 'fan'
 
 config led 'led'
 	option enabled '1'          # 0 = 四盏灯全灭（夜间模式）
-	option system 'on'          # on 常亮 / off 常灭 / keep 不干预
-	option internet 'on'
+	option system 'on'          # on 常亮 / off 常灭 / auto 跟随 WAN / keep 不干预
+	option internet 'auto'      # 默认 auto：通了常亮，不通则闪烁
 	option wifi 'on'
 	option modem 'on'
+
+config wan 'wan'
+	option enabled '1'          # 连通性探测总开关
+	option interval '10'        # 探测间隔（秒），3–300
+	option fail_threshold '3'   # 连续失败几次判 down
+	option ok_threshold '2'     # 连续成功几次判 up
+	option timeout '2'          # 单次探测超时（秒），1–10
+	option dns_server '223.5.5.5'
+	option dns_host 'www.baidu.com'
+	option ping_ip '223.5.5.5'
 ```
 
 命令行改完记得重载：`/etc/init.d/openfi-fan reload`（风扇热重载 + 灯光重新应用）
