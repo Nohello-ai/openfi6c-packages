@@ -65,15 +65,30 @@ ICCID 与 IMSI 是能定位到卡和用户的标识。页面只在本机显示�
 
 - **只读优先**：信息查询只发 `ATI` / `AT+xxx?` 这类查询指令，
   一条写指令都不发，所以刷新页面不会打断模块当前的数据连接。
-- **不依赖额外软件包**：只用 busybox 的 `stty` / `timeout` / `cat`。
+- **依赖 `coreutils-stty` + `coreutils-timeout`**（**必需**，已写进 Makefile 的
+  `LUCI_DEPENDS`）。**别以为 busybox 一定有这两个 applet** —— 实测多份自编固件
+  的 busybox 里 `stty` / `timeout` 都是**关掉**的：
+  `stty -F` 直接 `not found`，`busybox timeout` 报 `applet not found`，
+  连 `busybox --list` 都没有。缺了就会 `stty_failed` / 读不到数据，
+  模组页一片空白。走 coreutils 而不是去改 busybox 配置，是为了让这个包
+  **在任何固件上都装得上**。
   不需要 `sms_tool`、`picocom`、`atinout`。
+- **波特率设不上不算失败**：实测 RM500U-CN + `option` 驱动会**拒绝改波特率**
+  （`stty -F /dev/ttyUSBn 115200` → `unable to perform all requested operations`，
+  只有设成当前值 9600 这种空操作才会"成功"）。但 USB 串口的实际速率跟这个参数
+  无关（走 USB 包），收发完全正常。所以 `omod_open` 逐级降级：
+  带波特率 → 不带波特率 → 换重定向写法，**只要 raw/min/time 设上就算成功**。
 - **不调用 QModem**：QModem 的「拨号 + 硬件流量卸载」组合会把机器搞重启
   （FUjr/QModem discussions #214），本插件只用 AT 口读状态和切卡。
 - **串口读法**：`stty ... min 0 time 5` 之后，串口空闲 0.5 秒 `read()` 返回 0，
   `cat` 当作 EOF 自然退出。比「后台 `cat` + `sleep` + `kill`」那种写法
   更不容易漏数据，也不会留下僵尸进程。
 - **AT 口自动探测**：先按 `uci openfi_modem.modem.at_port`，再按 sysfs 里的
-  接口名（移远模组是 `Quectel USB AT Port`），最后按 `ttyUSB3..0` 顺序兜底。
+  接口名，最后按 `ttyUSB3..0` 顺序兜底。
+  > 注意：`$p/device/interface` 这个 sysfs 路径**在很多设备上并不存在**
+  > （MTK 平台实测就没有 `interface` 文件，只有 `bInterfaceClass` 等），
+  > 所以实际生效的通常就是最后的 `ttyUSB3..0` 兜底顺序。
+  > OpenFi 6C 上实测 **ttyUSB3 就是正确的 AT 口**。
 
 ## 文件
 

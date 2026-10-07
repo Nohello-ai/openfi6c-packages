@@ -72,11 +72,20 @@ omod_open() {
 	AT_BAUD="$(omod_uci openfi_modem.modem.baud)"
 	AT_BAUD="${AT_BAUD:-115200}"
 
-	# busybox stty 支持 -F；万一这个 busybox 没有 -F 就用重定向写法
+	# 配串口标志。**波特率设不上不算失败** ——
+	# 实测(RM500U-CN + option 驱动):这块板子的 USB 串口【拒绝 SET_LINE_CODING】,
+	# `stty -F /dev/ttyUSBn 115200` 会报 "unable to perform all requested operations",
+	# 只有设成当前值(9600)这种空操作才会"成功"。
+	# 但 USB 串口的实际速率跟这个波特率参数无关(走的是 USB 包),收发完全正常,
+	# 所以这里逐级降级:带波特率 → 不带波特率 → 换重定向写法,
+	# 只要能把 raw/min/time 设上就算成功。
+	# (同时也不能因为 stty 整个不存在就放弃 —— 见 omod_read 的 timeout 兜底。)
 	if ! stty -F "$AT_PORT" "$AT_BAUD" raw -echo -crtscts min 0 time 5 2>/dev/null; then
-		stty "$AT_BAUD" raw -echo -crtscts min 0 time 5 < "$AT_PORT" 2>/dev/null || {
-			AT_ERR="stty_failed"
-			return 1
+		stty -F "$AT_PORT" raw -echo -crtscts min 0 time 5 2>/dev/null ||
+		stty "$AT_BAUD" raw -echo -crtscts min 0 time 5 < "$AT_PORT" 2>/dev/null ||
+		stty raw -echo -crtscts min 0 time 5 < "$AT_PORT" 2>/dev/null || {
+			# 连 raw 都设不上:不判死,继续用默认 termios 收发(可能仍可用)
+			AT_ERR="stty_warn"
 		}
 	fi
 

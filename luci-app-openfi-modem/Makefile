@@ -21,7 +21,14 @@ PKG_MAINTAINER:=OpenFi 6C community port
 LUCI_MAINTAINER:=OpenFi 6C community port
 
 LUCI_TITLE:=LuCI app for OpenFi 6C 5G modem info and SIM slot switch
-LUCI_DEPENDS:=+kmod-usb-serial-option +kmod-usb-serial-wwan +jsonfilter
+# coreutils-stty / coreutils-timeout 是【必需】的，别删：
+#   at.sh 靠 stty 把串口设成 raw + min 0 time 5（空闲即返回，cat 才能自然结束），
+#   靠 timeout 兜底（没配成功时 cat 会一直阻塞）。
+#   实测多份自编固件的 busybox 里【没有】这两个 applet
+#   （`stty -F` → not found；`busybox timeout` → applet not found），
+#   缺了就会报 stty_failed / 读不到数据，模组页一片空白。
+#   走 coreutils 而不改 busybox 配置，是为了让这个包在任何固件上都能装得上。
+LUCI_DEPENDS:=+kmod-usb-serial-option +kmod-usb-serial-wwan +jsonfilter +coreutils-stty +coreutils-timeout
 LUCI_PKGARCH:=all
 LUCI_DESCRIPTION:=OpenFi 6C 5G 模组：信息/卡槽切换、信号历史与流量、AT 终端。
 
