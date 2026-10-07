@@ -4,6 +4,18 @@ SYSFS=${OPENFI_SYSFS:-/sys}
 RUNDIR=${OPENFI_RUNDIR:-/var/run}
 PWM="$SYSFS/class/pwm/pwmchip0"
 
+# ---- 三路温度来源 ----------------------------------------------------
+# CPU：内核 thermal zone
+CPU_TEMP_FILE=${OPENFI_CPU_TEMP:-$SYSFS/class/thermal/thermal_zone0/temp}
+# WiFi：MTK 闭源驱动用 iwpriv 暴露（厂商原版 op_fan.sh 就是这么读的）
+WIFI_IFACE=${OPENFI_WIFI_IFACE:-ra0}
+WIFI_TEMP_ENABLE=${OPENFI_WIFI_TEMP_ENABLE:-1}
+# 模组：由 luci-app-openfi-modem 的采样进程每轮写一个整数进来。
+# 走文件而不是自己开 AT 口 —— 省一路串口轮询，也不会跟信号采样抢口。
+MODEM_TEMPFILE=${OPENFI_MODEM_TEMPFILE:-$RUNDIR/openfi-modem.temp}
+# 超过这个秒数就认为文件过期（采样进程挂了），不当有效温度用。
+MODEM_TEMP_MAX_AGE=${OPENFI_MODEM_TEMP_MAX_AGE:-180}
+
 # 物理开关(静默模式)的共用逻辑。文件缺失时静默降级,风扇本体不受影响。
 # 路径可覆盖,方便脱离设备做单元测试。
 OPENFI_SILENT_LIB=${OPENFI_SILENT_LIB:-/usr/lib/openfi-fan/silent.sh}
@@ -72,22 +84,61 @@ curve() {
     done
 }
 read_temperatures() {
-    cpu=$(awk '$1 ~ /^[0-9]+$/ && $1 <= 150000 {printf "%d\n", $1/1000}' "$SYSFS/class/thermal/thermal_zone0/temp" 2>/dev/null)
+    cpu=$(awk '$1 ~ /^[0-9]+$/ && $1 <= 150000 {printf "%d\n", $1/1000}' "$CPU_TEMP_FILE" 2>/dev/null)
+
+    # WiFi：iwpriv <iface> stat 里的 CurrentTemperature，单位本来就是摄氏度
+    wifi=""
+    if [ "$WIFI_TEMP_ENABLE" = "1" ]; then
+        wifi=$(iwpriv "$WIFI_IFACE" stat 2>/dev/null | grep -i CurrentTemperature \
+               | awk -F '= ' '{print $2}' | tr -dc '0-9')
+        case "$wifi" in ''|*[!0-9]*) wifi="" ;; esac
+    fi
+
+    # 模组：采样进程写的「epoch 温度」两字段文件。
+    # 新鲜度靠文件里的时间戳判断 —— 这块板子的 busybox **没有 stat**
+    # （stty / timeout / stat 全缺），取不到 mtime，所以别用文件时间。
+    # 过期或缺温度都当作「这一路没数据」：宁可少一路保护，
+    # 也不拿几十分钟前的旧值去控风扇。
+    modem=""
+    if [ -r "$MODEM_TEMPFILE" ]; then
+        read -r ts mt < "$MODEM_TEMPFILE" 2>/dev/null
+        case "$ts" in ''|*[!0-9]*) ts="" ;; esac
+        case "$mt" in ''|*[!0-9]*) mt="" ;; esac
+        if [ -n "$ts" ] && [ -n "$mt" ]; then
+            age=$(( $(date +%s) - ts ))
+            [ "$age" -le "$MODEM_TEMP_MAX_AGE" ] && modem=$mt
+        fi
+    fi
+
+    # ---- 统一温度：取三路里最高的那个 ----
+    # 「任一传感器超限就动作」等价于「最高的那个 >= 阈值」，
+    # 所以直接把最高值喂给同一条曲线即可 —— 只维护一套阈值、一条曲线。
+    # thermal_src 只用于界面显示「是哪一路最热」。
+    temp=""; thermal_src=""
+    for pair in "cpu:$cpu" "wifi:$wifi" "modem:$modem"; do
+        name=${pair%%:*}; val=${pair#*:}
+        case "$val" in ''|*[!0-9]*) continue ;; esac
+        if [ -z "$temp" ] || [ "$val" -gt "$temp" ]; then
+            temp=$val; thermal_src=$name
+        fi
+    done
 }
 choose_speed() {
     reason=auto
     target=0
-    if ! uint "$cpu" 0 150; then target=100; reason=sensor_fault; return; fi
-    if [ "$cpu" -ge "$emergency_temp" ]; then target=100; reason=overheat; return; fi
+    # 全程用「统一温度」temp（CPU/WiFi/模组 三者最高，见 read_temperatures）。
+    # 这样只要维护一套阈值和一条曲线，等价于「任一路超限就动作」。
+    if ! uint "$temp" 0 150; then target=100; reason=sensor_fault; return; fi
+    if [ "$temp" -ge "$emergency_temp" ]; then target=100; reason=overheat; return; fi
     if [ "$mode" = manual ]; then
         target=$manual_speed
         [ "$target" -eq 0 ] || [ "$target" -ge "$min_speed" ] || target=$min_speed
         reason=manual
     else
-        target=$(curve "$cpu")
+        target=$(curve "$temp")
         if [ "$fan_stop" -eq 1 ]; then
-            if [ "$current" -eq 0 ] && [ "$cpu" -lt "$t1" ]; then target=0
-            elif [ "$current" -gt 0 ] && [ "$cpu" -le "$((t1 - 2))" ]; then target=0
+            if [ "$current" -eq 0 ] && [ "$temp" -lt "$t1" ]; then target=0
+            elif [ "$current" -gt 0 ] && [ "$temp" -le "$((t1 - 2))" ]; then target=0
             fi
         fi
     fi
@@ -128,7 +179,12 @@ write_speed() {
 }
 status() {
     now=$(date +%s)
-    printf '{"updated":%s,"mode":"%s","reason":"%s","output":%s,"target":%s,"cpu":%s,"period":%s}\n'         "$now" "$mode" "$reason" "$current" "$target" "${cpu:-null}" "$period"         > "$RUNDIR/openfi-fan.json.tmp"
+    # temp 是实际参与控制的「统一温度」；cpu/wifi/modem 三个原始值留给界面显示，
+    # thermal_src 说明当前最高的是哪一路。
+    printf '{"updated":%s,"mode":"%s","reason":"%s","output":%s,"target":%s,"temp":%s,"cpu":%s,"wifi":%s,"modem":%s,"thermal_src":"%s","period":%s}\n' \
+        "$now" "$mode" "$reason" "$current" "$target" "${temp:-null}" \
+        "${cpu:-null}" "${wifi:-null}" "${modem:-null}" "$thermal_src" "$period" \
+        > "$RUNDIR/openfi-fan.json.tmp"
     mv "$RUNDIR/openfi-fan.json.tmp" "$RUNDIR/openfi-fan.json"
 }
 shutdown() {
@@ -144,6 +200,7 @@ main() {
     trap 'reload_pending=1' HUP
     load_config
     cpu=; current=100; target=100
+    temp=; wifi=; modem=; thermal_src=""
     silent_forced=0
     trap shutdown EXIT
     trap 'exit 0' INT TERM

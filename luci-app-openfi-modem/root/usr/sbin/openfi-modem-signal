@@ -12,9 +12,14 @@
 # 每行：epoch|csq|dbm|rsrp|network
 # 环缓冲：只保留最后 keep 条（uci openfi_modem.signal.keep，默认 288 = 60 秒采样下的 4.8 小时）
 #
+# 附带：每轮把模组温度写到 $TEMPFILE，供 luci-app-openfi-fan 做散热判断。
+# 这样风扇不用自己开 AT 口（省掉一路串口轮询，也不会跟这里抢口）。
+# 文件内容就是一个十进制整数（摄氏度），读不到就写空。
+#
 . /usr/lib/openfi-modem/at.sh
 
 LOGFILE=${OPENFI_SIGNAL_LOG:-/tmp/openfi-signal.log}
+TEMPFILE=${OPENFI_MODEM_TEMPFILE:-/var/run/openfi-modem.temp}
 
 cfg_int() {
 	v=$(uci -q get "openfi_modem.signal.$1" 2>/dev/null)
@@ -38,11 +43,14 @@ do_sample() {
 	[ -n "$LOGFILE" ] || return 1
 
 	if ! omod_open; then
+		# 打不开口就把「时间戳 + 空温度」写下去，让风扇知道这一轮没数据，
+		# 而不是继续拿上一次的旧值当有效温度。
+		printf '%s\n' "$(date +%s)" > "$TEMPFILE" 2>/dev/null
 		return 1
 	fi
 
-	# 只发三条最轻的：一条 CSQ、一条 RSRP、一条制式
-	raw="$(omod_query AT+CSQ AT+QRSRP AT+QNWINFO)"
+	# 只发四条最轻的：CSQ、RSRP、制式，外加一条 QTEMP（给风扇用）
+	raw="$(omod_query AT+CSQ AT+QRSRP AT+QNWINFO AT+QTEMP)"
 	omod_close
 
 	csq="$(omod_after_colon "$(omod_line "$raw" '+CSQ:')" | cut -d, -f1 | tr -dc '0-9')"
@@ -54,6 +62,19 @@ do_sample() {
 	rsrp="$(omod_first_int "$(omod_after_colon "$(omod_line "$raw" '+QRSRP:')")")"
 
 	net="$(printf '%s' "$(omod_line "$raw" '+QNWINFO:')" | cut -d'"' -f2 | tr -d '"\\|')"
+
+	# 模组温度：+QTEMP 第一条(soc-thermal)的数字，与 openfi-modem-info 同一套解析。
+	#
+	# 格式写成「epoch 温度」两个字段（温度可能为空）。
+	# 为什么不靠文件 mtime 判新鲜度：这块板子的 busybox **连 stat 都没有**
+	# （stty / timeout / stat 全缺），没法可靠取 mtime。把时间写进文件里最省事，
+	# 读的一侧只用 `date +%s` 就够。
+	# 原子写，避免风扇读到写一半的文件。
+	temp="$(omod_first_int "$(omod_after_colon "$(omod_line "$raw" '+QTEMP:')")")"
+	case "$temp" in ''|*[!0-9]*) temp="" ;; esac
+	if printf '%s %s\n' "$(date +%s)" "$temp" > "$TEMPFILE.tmp" 2>/dev/null; then
+		mv "$TEMPFILE.tmp" "$TEMPFILE" 2>/dev/null || rm -f "$TEMPFILE.tmp" 2>/dev/null
+	fi
 
 	printf '%s|%s|%s|%s|%s\n' "$(date +%s)" "$csq" "$dbm" "$rsrp" "$net" >> "$LOGFILE"
 

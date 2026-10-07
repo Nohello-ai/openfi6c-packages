@@ -25,6 +25,15 @@ config fan 'fan'
 	# 物理开关哪一档算「静默」：1 = 高电平档（出厂默认），0 = 低电平档
 	option silent_when_hi '1'
 
+	# ---- 统一温度 ----
+	# 参与控温的不是单一 CPU 温度，而是 CPU / WiFi / 5G 模组 三路里**最高的那个**：
+	#   CPU   ← /sys/class/thermal/thermal_zone0/temp
+	#   WiFi  ← iwpriv ra0 stat 的 CurrentTemperature
+	#   模组  ← AT+QTEMP 的 soc-thermal（由 luci-app-openfi-modem 的采样进程提供）
+	# 取最高值喂给上面那条四点曲线，等价于「任一路超限就动作」，
+	# 所以不需要给每一路单独设阈值。界面上会把三个原始值都显示出来。
+	# 想让整体更凉／更静，直接调上面的 temp1~4 / speed1~4 即可。
+
 config led 'led'
 	# 灯光总开关：0 = 四盏灯全灭（夜间模式）
 	option enabled '1'

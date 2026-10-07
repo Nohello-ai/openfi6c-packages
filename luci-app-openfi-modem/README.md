@@ -78,6 +78,9 @@ ICCID 与 IMSI 是能定位到卡和用户的标识。页面只在本机显示�
   只有设成当前值 9600 这种空操作才会"成功"）。但 USB 串口的实际速率跟这个参数
   无关（走 USB 包），收发完全正常。所以 `omod_open` 逐级降级：
   带波特率 → 不带波特率 → 换重定向写法，**只要 raw/min/time 设上就算成功**。
+- **顺带给风扇提供模组温度**：`openfi-modem-signal` 每轮采样会在 `AT+QTEMP` 后把
+  「时间戳 温度」写进 `/var/run/openfi-modem.temp`，供 `luci-app-openfi-fan`
+  做三路温度联动用。写时间戳而不是靠 mtime —— 这块板子的 busybox 没有 `stat`。
 - **不调用 QModem**：QModem 的「拨号 + 硬件流量卸载」组合会把机器搞重启
   （FUjr/QModem discussions #214），本插件只用 AT 口读状态和切卡。
 - **串口读法**：`stty ... min 0 time 5` 之后，串口空闲 0.5 秒 `read()` 返回 0，

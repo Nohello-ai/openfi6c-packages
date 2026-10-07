@@ -129,6 +129,40 @@ respawn 之后会**恢复上次状态**，不会退回 unknown 白闪一阵。
 > 要改模组的 USB 数据模式请直接对 AT 口发指令（注意 `openfi-modem-at` 出于
 > 安全考虑把 `AT+QCFG="usbnet"` 拉黑了，得绕开它）。
 
+## 统一温度（CPU / WiFi / 5G 模组 取最高）
+
+**参与控温的不是单一 CPU 温度，而是三路里最高的那个：**
+
+| 来源 | 怎么读 | 实测 |
+|---|---|---|
+| **CPU** | `/sys/class/thermal/thermal_zone0/temp` | 58 °C |
+| **WiFi** | `iwpriv ra0 stat` 里的 `CurrentTemperature` | 46 °C |
+| **5G 模组** | `AT+QTEMP` 的 `soc-thermal`，由 `luci-app-openfi-modem` 的采样进程写到 `$RUNDIR/openfi-modem.temp` | 56 °C |
+
+```
+temp = max(cpu, wifi, modem)      ← 只这一个值参与控制
+target = 四点曲线(temp)
+```
+
+**为什么取最高值就够**：「任一路超限就动作」等价于「最高的那路 >= 阈值」，
+所以不需要给每一路单独设阈值 —— **只维护一套阈值、一条曲线**。
+界面上会把「控温用的当前温度」和「三路原始值」都列出来，并标出是哪一路最高。
+
+> 想让整体更凉／更静，直接调 `temp1~4` / `speed1~4` 那条曲线即可。
+
+### 两个踩过的坑（都跟 busybox 有关）
+
+1. **没有 `stat`**：一开始用文件 mtime 判温度文件新鲜度，结果这块板子的 busybox
+   里 `stat` / `stty` / `timeout` **全都没有**，mtime 取不到、算出个 17 亿秒的 age，
+   模组那一路永远被当成过期丢弃（现象：状态里 `"modem":null`）。
+   → 改成**把时间戳写进文件**（`epoch 温度` 两字段），读的一侧只用 `date +%s`。
+2. **模组温度别自己开 AT 口**：走 `openfi-modem-signal` 已有的 60 秒采样顺带写文件，
+   省一路串口轮询，也不会跟信号采样抢口。
+
+**为什么需要这个**：这块板子内核只暴露了 CPU 一个温度传感器，模组/WiFi 的温度
+分别只能从 iwpriv 和 AT 拿。只看 CPU 会出现「模组 70°C 而 CPU 50°C、
+风扇反而转得更慢」的反向情况。
+
 ## 控制逻辑
 
 - **四点温度曲线**：`temp1..temp4` → `speed1..speed4`，中间线性插值
@@ -186,6 +220,8 @@ config fan 'fan'
 	option speed4 '100'
 	option silent_max_temp '75'   # 静默档过热保护：到该温度强制开风扇
 	option silent_when_hi '1'     # 开关哪一档算静默：1=高电平档(默认) 0=低电平档
+	# 参与控温的是 CPU / WiFi / 5G 模组 三路里最高的那个，不需要逐路设阈值
+	# （cpu_temp_high / cpu_temp_low 是旧版遗留，仅用于推导曲线默认值）
 
 config led 'led'
 	option enabled '1'          # 0 = 四盏灯全灭（夜间模式）

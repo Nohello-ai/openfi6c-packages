@@ -23,6 +23,14 @@ function dash(v) {
 	return (v === undefined || v === null || v === '') ? '—' : String(v);
 }
 
+function fmtTemp(v) {
+	return (v === null || v === undefined || v === '') ? '—' : v + ' °C';
+}
+/* 哪一路最热（thermal_src）→ 可读名字 */
+function srcText(v) {
+	var m = { cpu: _('CPU'), wifi: 'WiFi', modem: _('5G 模组') };
+	return m[v] || v || '—';
+}
 function num(v, dflt) {
 	var n = parseInt(v, 10);
 	return isNaN(n) ? dflt : n;
@@ -121,7 +129,7 @@ return view.extend({
 		var chartSection = E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('曲线与当前温度')),
 			E('div', { 'class': 'cbi-section-descr' },
-				_('横轴温度、纵轴转速。虚线是当前 CPU 温度，用它看风扇此刻落在曲线哪一段。')),
+				_('横轴温度、纵轴转速。虚线是当前温度（CPU / WiFi / 5G 模组 三路里最高的那个），用它看风扇此刻落在曲线哪一段。')),
 			this.chartBody
 		]);
 
@@ -275,7 +283,12 @@ return view.extend({
 			rows.push(statusRow(_('错误'), d.error));
 
 		rows.push(statusRow(_('当前状态'), reasonText(dm.reason)));
-		rows.push(statusRow(_('CPU 温度'), (dm.cpu === null || dm.cpu === undefined) ? '—' : dm.cpu + ' °C'));
+		rows.push(statusRow(_('当前温度（控温用）'),
+			fmtTemp(dm.temp) + (dm.thermal_src ? '（' + srcText(dm.thermal_src) + _('最高') + '）' : '')));
+		rows.push(statusRow(_('三路温度'),
+			_('CPU') + ' ' + fmtTemp(dm.cpu) + '　' +
+			'WiFi ' + fmtTemp(dm.wifi) + '　' +
+			_('5G 模组') + ' ' + fmtTemp(dm.modem)));
 		rows.push(statusRow(_('风扇输出'), (dm.output === null || dm.output === undefined) ? '—' : dm.output + ' %'));
 		rows.push(statusRow(_('目标转速'), (dm.target === null || dm.target === undefined) ? '—' : dm.target + ' %'));
 		rows.push(statusRow(_('模式'), (dm.mode === 'manual') ? _('手动') : _('自动')));
@@ -300,12 +313,13 @@ return view.extend({
 			num(cfg.speed3, 68), num(cfg.speed4, 100)
 		];
 		var emg = num(cfg.emergency_temp, 85);
-		var cpu = (dm.cpu === null || dm.cpu === undefined) ? null : num(dm.cpu, null);
+		/* 竖线用「统一温度」（三路最高），也就是真正参与控温的那个值 */
+		var cur = (dm.temp === null || dm.temp === undefined) ? null : num(dm.temp, null);
 
 		var W = 460, H = 190;
 		var padL = 42, padR = 14, padT = 14, padB = 30;
-		var minT = Math.min(t[0] - 5, cpu === null ? t[0] - 5 : cpu - 2);
-		var maxT = Math.max(t[3] + 5, emg, cpu === null ? t[3] : cpu + 2);
+		var minT = Math.min(t[0] - 5, cur === null ? t[0] - 5 : cur - 2);
+		var maxT = Math.max(t[3] + 5, emg, cur === null ? t[3] : cur + 2);
 		var spanT = Math.max(maxT - minT, 1);
 
 		function px(temp) {
@@ -371,12 +385,12 @@ return view.extend({
 		}
 
 		/* 当前温度标记 */
-		if (cpu !== null) {
+		if (cur !== null) {
 			g.push(svgEl('line', {
-				'x1': px(cpu), 'y1': padT, 'x2': px(cpu), 'y2': H - padB,
+				'x1': px(cur), 'y1': padT, 'x2': px(cur), 'y2': H - padB,
 				'stroke': 'currentColor', 'stroke-width': '1.5', 'stroke-dasharray': '4 2'
 			}));
-			g.push(svgText(px(cpu), H - padB + 27, _('当前') + ' ' + cpu + '°', { 'font-size': '10' }));
+			g.push(svgText(px(cur), H - padB + 27, _('当前') + ' ' + cur + '°', { 'font-size': '10' }));
 		}
 
 		/* 轴标题 */
