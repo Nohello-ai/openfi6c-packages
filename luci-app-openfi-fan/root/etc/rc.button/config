@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# OpenFi 6C 物理开关(pio 0)的按键处理 —— 静默模式开关。
+#
+# 为什么文件名叫 config:
+#   gpio-button-hotplug 按 linux,code 查它内置的映射表取名,
+#   KEY_CONFIG(0xab) → "config",procd 于是执行 /etc/rc.button/config。
+#   设备树里的 label(叫 func)只影响 debugfs 里显示的名字,不参与取名。
+#
+# 行为:
+#   静默档 → 风扇停转 + 四盏状态灯全灭
+#   正常档 → 立刻恢复 UCI 里保存的风扇曲线与灯光设置
+#
+# 只写运行时标志 /var/run/openfi-silent,不碰 UCI,
+# 所以拨回去会自动恢复你原来的设置,不会把配置改脏。
+
+. "${OPENFI_SILENT_LIB:-/usr/lib/openfi-fan/silent.sh}"
+
+logger -t openfi-switch "ACTION=$ACTION 电平=$(openfi_switch_level) 静默=$(openfi_switch_silent)"
+
+case "$ACTION" in
+pressed|released)
+	# 1) 按物理开关更新运行时标志
+	openfi_silent_sync
+
+	# 2) 让风扇守护进程立刻重新判断,不用等它下一个采样周期
+	for p in $(pgrep -f '/usr/sbin/openfi-fan$' 2>/dev/null); do
+		kill -HUP "$p" 2>/dev/null
+	done
+
+	# 3) 灯光立刻生效(openfi-led 会读同一个标志)
+	/usr/sbin/openfi-led apply >/dev/null 2>&1
+	;;
+timeout)
+	# 开关长时间停在某一档:按 OpenWrt 惯例进 failsafe
+	. /etc/diag.sh 2>/dev/null
+	set_state failsafe 2>/dev/null
+	;;
+esac
+
+return 0

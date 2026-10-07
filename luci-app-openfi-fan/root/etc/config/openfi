@@ -20,6 +20,10 @@ config fan 'fan'
 	option speed2 '36'
 	option speed3 '68'
 	option speed4 '100'
+	# 静默模式（物理开关那一档）下的过热保护：CPU 达到该温度就强制开风扇
+	option silent_max_temp '75'
+	# 物理开关哪一档算「静默」：1 = 高电平档（出厂默认），0 = 低电平档
+	option silent_when_hi '1'
 
 config led 'led'
 	# 灯光总开关：0 = 四盏灯全灭（夜间模式）

@@ -27,6 +27,46 @@ OpenFi 6C 的**散热风扇 + 状态灯管理**。独立包，跟厂商那套 `l
 设备树里 `pwm-fan` 节点已置 `disabled` —— 两路 PWM 由本包的守护进程独占
 （`/sys/class/pwm/pwmchip0/pwm0` + `pwm1`），交给内核 pwm-fan 驱动会互相抢。
 
+## 物理开关：静默模式
+
+机身上那个拨动开关接在 **pio 0**（设备树 `gpio-keys` 的 `func` 节点，
+`linux,code = <KEY_CONFIG>`）。拨到静默档：
+
+- **风扇停转**
+- **四盏状态灯全灭**
+
+拨回正常档立刻恢复 UCI 里保存的曲线与灯光设置。全程**不写 UCI**，
+只用运行时标志 `/var/run/openfi-silent`，所以拨来拨去不会把你保存的配置改脏。
+
+### 两条触发路径（互相兜底）
+
+| 路径 | 机制 |
+|---|---|
+| **事件**（瞬间响应） | `gpio-button-hotplug` 按 **keycode** 查内置映射表：`KEY_CONFIG(0xab) → "config"`，于是 procd 执行 `/etc/rc.button/config`。**名字来自 keycode 而不是设备树 label** —— label 叫 `func`，那只影响 debugfs 里显示的名字 |
+| **轮询**（兜底） | `openfi-fan` 每轮采样都重读一次开关。即使按键事件丢了、或者开机时开关就已经在静默档，最多一个 `period` 秒也会纠正 |
+
+> 这也是为什么本包同时提供 `/etc/rc.button/config` 和守护进程内的轮询 ——
+> 只靠按键事件的话，开机时开关已经在静默档的场合会漏掉。
+
+### 过热保护（重要）
+
+静默档停转之后，如果 CPU 温度达到 `silent_max_temp`（默认 **75℃**），
+守护进程会**强制把风扇打开**并记日志；温度回落再恢复静默。
+宁可吵一点，也不要烧板子。想关掉这个保护就把阈值调到 110（上限）。
+
+### 哪一档算「静默」
+
+开关两档的电平分别是 `hi` / `lo`。默认 **`hi` = 静默**
+（依据：厂商 `op_switch.sh` 注释 `swich low: led on...; high: led off...`）。
+
+手感相反就改 UCI，不用动脚本：
+
+```sh
+uci set openfi.fan.silent_when_hi='0'
+uci commit openfi
+/etc/init.d/openfi-fan reload
+```
+
 ## 控制逻辑
 
 - **四点温度曲线**：`temp1..temp4` → `speed1..speed4`，中间线性插值
@@ -82,6 +122,8 @@ config fan 'fan'
 	option speed2 '36'
 	option speed3 '68'
 	option speed4 '100'
+	option silent_max_temp '75'   # 静默档过热保护：到该温度强制开风扇
+	option silent_when_hi '1'     # 开关哪一档算静默：1=高电平档(默认) 0=低电平档
 
 config led 'led'
 	option enabled '1'          # 0 = 四盏灯全灭（夜间模式）

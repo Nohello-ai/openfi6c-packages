@@ -4,6 +4,15 @@ SYSFS=${OPENFI_SYSFS:-/sys}
 RUNDIR=${OPENFI_RUNDIR:-/var/run}
 PWM="$SYSFS/class/pwm/pwmchip0"
 
+# 物理开关(静默模式)的共用逻辑。文件缺失时静默降级,风扇本体不受影响。
+# 路径可覆盖,方便脱离设备做单元测试。
+OPENFI_SILENT_LIB=${OPENFI_SILENT_LIB:-/usr/lib/openfi-fan/silent.sh}
+have_silent=0
+if [ -r "$OPENFI_SILENT_LIB" ]; then
+	. "$OPENFI_SILENT_LIB"
+	have_silent=1
+fi
+
 uint() {
     case "$1" in ''|*[!0-9]*) return 1;; esac
     [ "${#1}" -le 3 ] && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
@@ -135,6 +144,7 @@ main() {
     trap 'reload_pending=1' HUP
     load_config
     cpu=; current=100; target=100
+    silent_forced=0
     trap shutdown EXIT
     trap 'exit 0' INT TERM
     read_temperatures
@@ -152,6 +162,50 @@ main() {
             load_config
         fi
         read_temperatures
+
+        # ── 静默模式 ────────────────────────────────────────────────
+        # 每轮重读一次物理开关,作为 /etc/rc.button/config 事件路径之外的兜底:
+        # 即使按键事件丢了(或开机时开关就在静默档),最多一个采样周期就能纠正。
+        # 静默档 → 风扇停转;但 CPU 到 silent_max_temp 会强制恢复,避免过热。
+        silent_now=0
+        if [ "$have_silent" = "1" ]; then
+            openfi_silent_sync
+            if openfi_silent_active; then
+                silent_max=$(option silent_max_temp 75 50 110)
+                if uint "$cpu" 0 150 && [ "$cpu" -ge "$silent_max" ]; then
+                    if [ "$silent_forced" != "1" ]; then
+                        logger -t openfi-fan "静默模式过热保护：${cpu}°C ≥ ${silent_max}°C，强制开启风扇"
+                        silent_forced=1
+                    fi
+                else
+                    silent_now=1
+                    if [ "$silent_forced" = "1" ]; then
+                        logger -t openfi-fan "温度回落到 ${cpu}°C，恢复静默"
+                        silent_forced=0
+                    fi
+                fi
+            else
+                silent_forced=0
+            fi
+        fi
+
+        if [ "$silent_now" = "1" ]; then
+            target=0
+            if [ "$current" -ne 0 ]; then
+                if ! write_speed 0; then
+                    reason=pwm_fault; status
+                    logger -t openfi-fan "PWM write failed"
+                    exit 1
+                fi
+                current=0
+            fi
+            reason=silent
+            status
+            sleep "$period"
+            continue
+        fi
+        # ───────────────────────────────────────────────────────────
+
         choose_speed
         if [ "$target" -gt 0 ] && [ "$current" -eq 0 ]; then
             write_speed 100 || exit 1

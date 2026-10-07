@@ -15,9 +15,20 @@
 #
 # 总开关 openfi.led.enabled=0 → 四盏灯全部熄灭（夜间模式）。
 #
+# 物理开关的「静默模式」也走这里：开关拨到静默档时（运行时标志
+# /var/run/openfi-silent 存在），无论 UCI 怎么配，四盏灯一律全灭。
+#
 LED_NAMES="system internet wifi modem"
 LEDROOT=${OPENFI_LEDROOT:-/sys/class/leds}
 RUNDIR=${OPENFI_RUNDIR:-/var/run}
+
+# 静默模式共用逻辑（缺失时降级为不支持静默；路径可覆盖,便于单元测试）
+OPENFI_SILENT_LIB=${OPENFI_SILENT_LIB:-/usr/lib/openfi-fan/silent.sh}
+have_silent=0
+if [ -r "$OPENFI_SILENT_LIB" ]; then
+	. "$OPENFI_SILENT_LIB"
+	have_silent=1
+fi
 
 num() {
 	case "$1" in
@@ -68,6 +79,15 @@ set_one() {
 
 do_apply() {
 	rc=0
+
+	# 静默模式优先：物理开关拨到静默档 → 不管 UCI 怎么配，四盏灯一律全灭
+	if [ "$have_silent" = "1" ] && openfi_silent_active; then
+		for n in $LED_NAMES; do
+			set_one "$n" off || rc=1
+		done
+		[ "$rc" -eq 0 ] && logger -t openfi-led "静默模式：四盏灯全灭"
+		return "$rc"
+	fi
 
 	if [ "$(global_enabled)" = 0 ]; then
 		for n in $LED_NAMES; do
