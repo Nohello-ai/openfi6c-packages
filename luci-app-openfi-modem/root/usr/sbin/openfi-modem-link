@@ -40,7 +40,11 @@ DEV="$(uci -q get network.wan.device 2>/dev/null)"
 [ -n "$DEV" ] || DEV="$(uci -q get network.wan.ifname 2>/dev/null)"
 
 if [ -z "$DEV" ] || [ ! -d "/sys/class/net/$DEV" ]; then
-	DEV="$(ls /sys/class/net 2>/dev/null | grep -E '^usb[0-9]+$' | head -1)"
+	# 模组的 USB 数据模式决定网卡名，几种模式的命名不一样：
+	#   RNDIS / ECM  → usb0
+	#   NCM / MBIM / QMI → wwan0
+	# 所以这里不能只找 usb*，否则把模组切成 NCM 之后就永远探测不到了。
+	DEV="$(ls /sys/class/net 2>/dev/null | grep -E '^(usb|wwan|eth)[0-9]+$' | head -1)"
 fi
 [ -n "$DEV" ] || DEV="usb0"
 
