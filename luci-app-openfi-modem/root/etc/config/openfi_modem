@@ -15,20 +15,3 @@ config signal 'signal'
 	option interval '60'
 	# 环缓冲保留多少条（288 × 60 秒 ≈ 4.8 小时）
 	option keep '288'
-
-config usbmode 'usbmode'
-	# 开机自动探测模组最佳的 USB 数据模式。
-	#   auto —— 按 MBIM(2) → NCM(5) → RNDIS(3) 逐个试，哪个真通就用哪个，
-	#           结果记在 /etc/openfi-usbmode，以后开机直接用
-	#   off  —— 不探测，保持模组当前设置（想自己管就选它）
-	#   0-5  —— 钉死某个模式（不建议，除非你知道自己在做什么）
-	#
-	# 为什么按这个顺序：
-	#   MBIM  没有模组内部 NAT，主机直接拿运营商 IP，理论上最好
-	#   NCM   多包聚合，比 RNDIS 快一档，但仍有模组内部 NAT
-	#   RNDIS 兼容性最好、速度最差，兜底用
-	# 不用 RMNET/QMI：RM500U 是展锐平台，高通那套原生模式基本没实现。
-	#
-	# 注意：切换模式会让模组重新枚举（USB 拔插一次），WAN 会断十几秒。
-	# 首次开机会明显变慢，之后就不折腾了。
-	option mode 'auto'
