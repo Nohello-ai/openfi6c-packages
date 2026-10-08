@@ -3,6 +3,7 @@
 'require fs';
 'require ui';
 'require poll';
+'require uci';
 
 /*
  * OpenFi 6C「短信」页面
@@ -23,7 +24,15 @@
  */
 
 var CMD = '/usr/sbin/openfi-sms';
+
+/* 默认值；真实值从 uci openfi_sms 读（见 load） */
 var POLL_SECS = 30;
+var MARK_READ = 1;
+
+function confInt(name, dflt) {
+	var v = parseInt(uci.get('openfi_sms', 'sms', name), 10);
+	return isNaN(v) ? dflt : v;
+}
 
 function esc(s) {
 	return String(s == null ? '' : s)
@@ -53,7 +62,11 @@ function call(action, args) {
 
 return view.extend({
 	load: function () {
-		return call('list', []);
+		return uci.load('openfi_sms').then(function () {
+			POLL_SECS = confInt('poll', 30);
+			MARK_READ  = confInt('mark_read_on_open', 1);
+			return call('list', []);
+		});
 	},
 
 	/* ── 弹窗看完整内容 ───────────────────────────────── */
@@ -90,8 +103,9 @@ return view.extend({
 			}, _('从 SIM 删除'))
 		];
 
-		/* 打开就把它标记成已读（AT+CMGR 的副作用，和手机上的行为一致） */
-		if (m.unread)
+		/* 打开就标记已读（AT+CMGR 的副作用，和手机上的行为一致）。
+		 * 关掉这个开关就不发 CMGR —— 有些人不希望动 SIM 上的状态位。 */
+		if (m.unread && MARK_READ)
 			call('mark', [ m.idx ]).then(function () { self.refresh(); });
 
 		ui.showModal(_('短信详情'), [ body, E('div', { 'class': 'right' }, btns) ]);
@@ -234,6 +248,8 @@ return view.extend({
 		};
 
 		this.fill(data || {});
+		if (POLL_SECS < 5) POLL_SECS = 5;
+		if (POLL_SECS > 600) POLL_SECS = 600;
 		poll.add(function () { return self.refresh(); }, POLL_SECS);
 
 		return container;
