@@ -31,6 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 【重要】预检:把"编译会不会挂"这件事在【编译之前】就查出来。
+      # 之前吃过亏:feed 扫描器只认 Makefile 里的 'call BuildPackage' 字符串,
+      # SMS 包漏了这行 → 扫描器看不见它 → 固件那边配置符号变未知 → 断言失败,
+      # 而包 CI 因为直接 cp 进 package/ 编译、不走扫描器,一直是绿的。
+      # 两边行为不一致,排查了好几轮。现在这些检查在推之前/编译之前就做。
+      - name: 预检（feed 扫描器识别 / git 跟踪 / Makefile 字段 / YAML / 脚本语法）
+        run: sh tests/preflight.sh
+
       - name: 跑测试
         run: sh tests/run.sh
   build:
