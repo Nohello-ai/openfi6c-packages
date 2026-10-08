@@ -76,6 +76,24 @@ printf '%s\n' "$OUT" | while IFS='|' read -r idx body; do
 	[ -n "$body" ] || printf '  ❌ #%s 正文为空\n' "$idx"
 done
 
+# ── 编码往返：发出去的短信，编码后再解开必须一致（全程本地，不发短信）
+ENC="$(ucode -L "$PKG_LIB" -e "
+import { encodeSubmit, decodeSubmit } from 'pdu';
+let cases = [['13870212951','OpenFi 6C 测试短信'],['10086','hello'],['+8613800138000','中文 mixed 123']];
+let bad = 0;
+for (let i = 0; i < length(cases); i++) {
+	let e = encodeSubmit(cases[i][0], cases[i][1]);
+	let d = decodeSubmit(e.pdu);
+	if (d.to != cases[i][0] || d.body != cases[i][1]) { print('MISMATCH ' + cases[i][0] + ' -> ' + d.to + ' / ' + d.body); bad++; }
+}
+print(bad ? ('ENC_FAIL ' + bad) : 'ENC_OK');
+" 2>&1)"
+case "$ENC" in
+	*ENC_OK*) ok "编码→解码 往返一致（中文 / 国际号码 / 短号）" ;;
+	*)        bad "编码往返失败：$ENC" ;;
+esac
+
+
 printf '\n  解出 %s 条，解码报错 %s 条\n' "$N" "$ERRS"
 [ "$ERRS" -eq 0 ] || FAIL=$((FAIL+1))
 
