@@ -1,15 +1,16 @@
 {
 	"admin/fan": {
-		"title": "散热与灯光",
+		"title": "散热",
 		"order": 46,
 		"action": {
 			"type": "firstchild"
 		},
 		"depends": {
-			"acl": [ "luci-app-openfi-fan" ]
+			"acl": [
+				"luci-app-openfi-fan"
+			]
 		}
 	},
-
 	"admin/fan/status": {
 		"title": "风扇控制",
 		"order": 10,
@@ -18,19 +19,9 @@
 			"path": "openfi/fan"
 		},
 		"depends": {
-			"acl": [ "luci-app-openfi-fan" ]
-		}
-	},
-
-	"admin/fan/led": {
-		"title": "状态灯",
-		"order": 20,
-		"action": {
-			"type": "view",
-			"path": "openfi/led"
-		},
-		"depends": {
-			"acl": [ "luci-app-openfi-fan" ]
+			"acl": [
+				"luci-app-openfi-fan"
+			]
 		}
 	}
 }

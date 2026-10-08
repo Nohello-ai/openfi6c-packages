@@ -22,7 +22,7 @@ LUCI_MAINTAINER:=OpenFi 6C community port
 LUCI_TITLE:=LuCI app for OpenFi 6C fan and status LED control
 LUCI_DEPENDS:=+luci-base
 LUCI_PKGARCH:=all
-LUCI_DESCRIPTION:=OpenFi 6C 风扇与状态灯管理：四点温度曲线、手动转速、最低转速、紧急全速、采样周期；四盏状态灯独立控制。
+LUCI_DESCRIPTION:=OpenFi 6C 风扇管理：四点温度曲线、手动转速、最低转速、紧急全速、采样周期。状态灯走 LuCI 系统自带的 LED 配置页。
 LUCI_MINIFY_JS:=0
 
 define Package/luci-app-openfi-fan/conffiles
