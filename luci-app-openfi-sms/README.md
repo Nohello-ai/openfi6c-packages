@@ -84,3 +84,35 @@ UDH 的 septet 对齐、TON 在 bit4~6、`int("0xff")` 在 ucode 里返回 0、
 
 `send` 需要 PDU **编码**（当前模组是 `+CMGF:0` PDU 模式），而且**会真的发出去**
 —— 真机测试要花钱/占额度，所以单独一步做，不草率实现。
+
+## 部署时的一个坑（真机测试踩到的）
+
+把包推到设备上试跑时，别让**目录名和后端文件名撞名**：
+
+```
+/tmp/openfi-sms-test/openfi-sms            ← 目录（放 .uc 的）
+/tmp/openfi-sms-test/openfi-sms/openfi-sms ← scp 会把后端塞进【目录里面】
+```
+
+后果：`sh /tmp/openfi-sms-test/openfi-sms send ...` 是在对一个**目录**执行，
+**无输出、返回码 0** —— 看起来"成功"了，其实一个字都没发。
+（第一次真机测试就这么被骗过一次。）
+
+现在用不会撞的布局：
+
+```
+/tmp/openfi-sms-test/lib/pdu.uc encode.uc decode.uc   ← OPENFI_SMS_LIB
+/tmp/openfi-sms-test/at/at.sh                          ← OPENFI_SMS_AT
+/tmp/openfi-sms-test/bin/openfi-sms                    ← 后端
+```
+
+**推完一定核对 md5**，两边不一致就是没推成功。
+
+## 真机验证结果（2026-10-08）
+
+```
+send 13870212951 "OpenFi 6C 测试短信"
+→ {"ok":true,"to":"13870212951","chars":22}   ✅ 成功
+→ AT 口 /dev/ttyUSB3，锁正常获取与释放        ✅
+→ 临时文件无残留                              ✅
+```
