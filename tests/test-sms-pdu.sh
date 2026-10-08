@@ -15,6 +15,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PDU="$HERE/../luci-app-openfi-sms/root/usr/lib/openfi-sms/pdu.uc"
 FIX="$HERE/fixtures/pdus-real.txt"
+PKG_LIB="$HERE/../luci-app-openfi-sms/root/usr/lib/openfi-sms"
 FAIL=0
 ok()  { printf '  ✅ %s\n' "$1"; }
 bad() { printf '  ❌ %s\n' "$1"; FAIL=$((FAIL+1)); }

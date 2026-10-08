@@ -215,6 +215,35 @@ omod_query() {
 	omod_read
 }
 
+# ------------------------------------------------------------------ 发一条 PDU
+# AT+CMGS 是【交互式】的，不能像查询那样"写完再读"：
+#   ① 发 AT+CMGS=<TPDU 字节数>
+#   ② 等模块回一个 "> " 提示符
+#   ③ 再把 PDU 十六进制发过去，并以 Ctrl-Z(0x1A) 结尾
+#   ④ 模块回 +CMGS: <消息参考号> 和 OK
+# 这里靠 stty 的 min 0 time 5（空闲 0.5 秒 read 返回）来「等提示符」，
+# 不 sleep 固定时间 —— 模块快就快、慢就多等一个周期。
+omod_send_pdu() {
+	local octets="$1" pdu="$2" resp
+
+	printf 'AT+CMGS=%s\r' "$octets" > "$AT_PORT" 2>/dev/null
+
+	resp="$(timeout 2 cat "$AT_PORT" 2>/dev/null)"
+	case "$resp" in
+		*'>'*) : ;;
+		*) printf '%s' "$resp"; AT_ERR="no_prompt"; return 1 ;;
+	esac
+
+	printf '%s\032' "$pdu" > "$AT_PORT" 2>/dev/null
+
+	resp="$(omod_read)"
+	printf '%s' "$resp"
+	case "$resp" in
+		*+CMGS:*|*OK*) return 0 ;;
+		*) AT_ERR="send_failed"; return 1 ;;
+	esac
+}
+
 # ------------------------------------------------------------------ 解析
 # 取某条指令的响应段（不含回显行和结尾的 OK/ERROR）。
 # 依赖模块回显（ATE1，出厂默认）；回声关掉时返回空，调用方需自行兜底。

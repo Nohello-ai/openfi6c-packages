@@ -100,7 +100,41 @@ do_sent() {
 # 需要 PDU 编码（当前模组是 +CMGF:0 PDU 模式），而且**会真的发出去**
 # —— 真机测试要花钱/占额度，所以单独一步做，不在这里草率实现。
 do_send() {
-	json_err "not_implemented_yet"
+	local num="$1" text="$2" tf enc pdu octets resp rc
+
+	[ -n "$num" ] || json_err "missing_number"
+	[ -n "$text" ] || json_err "missing_text"
+
+	# 正文走临时文件：中文/引号/星号都不用操心转义
+	tf="$RUNDIR/openfi-sms-text.$$"
+	printf '%s' "$text" > "$tf" || json_err tmp_failed
+
+	enc="$(ucode -L "$OPENFI_SMS_LIB" "$OPENFI_SMS_LIB/encode.uc" "$num" "$tf" 2>&1)"
+	rm -f "$tf"
+
+	case "$enc" in
+		'{'*) : ;;
+		*) json_err "encode_failed: $(printf '%s' "$enc" | head -c 120)" ;;
+	esac
+
+	pdu="$(printf '%s' "$enc" | sed -n 's/.*"pdu":"\([0-9A-F]*\)".*/\1/p')"
+	octets="$(printf '%s' "$enc" | sed -n 's/.*"octets":\([0-9]*\).*/\1/p')"
+
+	[ -n "$pdu" ] || json_err "encode_empty"
+	[ -n "$octets" ] || json_err "encode_empty"
+
+	omod_open || json_err "${AT_ERR:-open_failed}"
+	resp="$(omod_send_pdu "$octets" "$pdu" 2>&1)"
+	rc=$?
+	omod_close
+
+	if [ "$rc" -ne 0 ]; then
+		json_err "send_failed: $(printf '%s' "$resp" | tr -d '\r' | head -c 160)"
+	fi
+
+	# 记进本地发件箱（SIM 上不一定留）
+	printf '{"ok":true,"to":"%s","chars":%s}\n' \
+		"$(json_escape "$num")" "$(printf '%s' "$enc" | sed -n 's/.*"chars":\([0-9]*\).*/\1/p')"
 }
 
 # ------------------------------------------------------------------ 入口

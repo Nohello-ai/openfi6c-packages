@@ -291,4 +291,157 @@ function joinConcat(list) {
 	return out;
 }
 
-export { decodePdu, joinConcat };
+/* ================================================================
+ * 编码：把「号码 + 正文」变成 SMS-SUBMIT 的 PDU
+ *
+ *   [SMSC][FO][MR][DA][PID][DCS][UDL][UD]
+ *
+ * 设计取舍：
+ *   · SMSC 用 "00"（长度 0）= 让模组用它自己配好的短信中心，
+ *     这样不用去查当前短信中心号码，也不怕换卡。
+ *   · 第一字节 0x01 = SMS-SUBMIT + 无有效期 + 无 UDH。
+ *     （常见写法 0x11 是带相对有效期的，会多一个 VP 字节，这里用不上。）
+ *   · DCS 一律 0x08（UCS2）。中文英文都走这条路，
+ *     不用先判断正文里有没有非 GSM 字符 —— 少一个分支就少一类 bug。
+ *     代价是一条只能装 70 个字符（UCS2 每字符 2 字节），够用。
+ * ================================================================ */
+
+/* ucode 的字符串是 UTF-8：substr(s,i,1) 拿到的是【一个字节】，
+ * 所以要先自己解出码点，才能转 UCS2。 */
+function utf8Decode(s) {
+	let cps = [];
+	let i = 0;
+	while (i < length(s)) {
+		let b = ord(substr(s, i, 1));
+		let cp, n;
+
+		if (b < 0x80)       { cp = b;         n = 1; }
+		else if (b < 0xe0)  { cp = b & 0x1f;  n = 2; }
+		else if (b < 0xf0)  { cp = b & 0x0f;  n = 3; }
+		else                { cp = b & 0x07;  n = 4; }
+
+		for (let k = 1; k < n; k++) {
+			if (i + k >= length(s)) break;
+			cp = (cp << 6) | (ord(substr(s, i + k, 1)) & 0x3f);
+		}
+		push(cps, cp);
+		i += n;
+	}
+	return cps;
+}
+
+/* 号码 → { toa, len, data }（TP-Destination-Address 三段） */
+function encodeNumber(num) {
+	let s = trim(num);
+	let intl = false;
+
+	if (substr(s, 0, 1) == '+') { intl = true; s = substr(s, 1); }
+	/* 只留数字：空格、短横线都去掉 */
+	let digits = '';
+	for (let i = 0; i < length(s); i++) {
+		let c = substr(s, i, 1);
+		if (c >= '0' && c <= '9')
+			digits += c;
+	}
+
+	/* 奇数位补 F（半字节填充），然后两两交换 */
+	let padded = (length(digits) % 2) ? (digits + 'F') : digits;
+	let data = swapNibbles(padded);
+
+	return {
+		toa: sprintf('%02X', intl ? 0x91 : 0x81),
+		len: sprintf('%02X', length(digits)),
+		data: data
+	};
+}
+
+/*
+ * 返回 { pdu: '<完整 PDU 十六进制>', tpdu_octets: N }
+ * tpdu_octets 是 AT+CMGS= 后面要填的数：**不含 SMSC 部分**的字节数。
+ */
+function encodeSubmit(number, text) {
+	let da = encodeNumber(number);
+	let cps = utf8Decode(text);
+
+	/* UCS2：每个码点两个字节，大端 */
+	let ud = '';
+	for (let i = 0; i < length(cps); i++) {
+		let cp = cps[i];
+		/* 超出 BMP 的（emoji 等）用代理对 */
+		if (cp > 0xffff) {
+			cp -= 0x10000;
+			ud += sprintf('%04X%04X', 0xd800 | (cp >> 10), 0xdc00 | (cp & 0x3ff));
+		}
+		else {
+			ud += sprintf('%04X', cp);
+		}
+	}
+
+	let udOctets = length(ud) / 2;
+	if (udOctets > 140)
+		return { error: 'too_long', max_chars: 70, chars: length(cps) };
+
+	let tpdu =
+		'01' +					/* FO: SUBMIT, 无 VP, 无 UDH */
+		'00' +					/* MR */
+		da.len + da.toa + da.data +		/* DA */
+		'00' +					/* PID */
+		'08' +					/* DCS: UCS2 */
+		sprintf('%02X', udOctets) +		/* UDL（UCS2 时就是字节数） */
+		ud;
+
+	return {
+		pdu: '00' + tpdu,			/* 前面加 SMSC 长度 0 */
+		tpdu_octets: length(tpdu) / 2
+	};
+}
+
+/*
+ * 解码 SMS-SUBMIT（自己发出去的）。用来验证编码器，也用来显示发件箱。
+ * 结构： [SMSC][FO][MR][DA][PID][DCS][UDL][UD]
+ * 和 DELIVER 的差别：MR 在 DA 之前，没有 SCTS。
+ */
+function decodeSubmit(pduHex) {
+	let h = uc(pduHex);
+	let p = 0;
+
+	let scaLen = byteAt(h, 0);
+	let smsc = '(用模组默认)';
+	if (scaLen > 0)
+		smsc = parseAddr(h, 0, true).value;
+	p += 2 + scaLen * 2;
+
+	let fo = byteAt(h, p / 2); p += 2;
+	let mr = byteAt(h, p / 2); p += 2;
+
+	/* DA 的长度单位是【位数】（和 DELIVER 的发件人一样） */
+	let da = parseAddr(h, p, false);
+	p += da.consumed;
+
+	let pid = byteAt(h, p / 2); p += 2;
+	let dcs = byteAt(h, p / 2); p += 2;
+
+	/* 有有效期时（TP-VPF != 0）要跳过对应字节数 */
+	let vpf = (fo >> 3) & 0x03;
+	if (vpf == 0x01) p += 2;		/* 增强格式 7 字节，极少用，先不处理 */
+	else if (vpf == 0x02) p += 2;		/* 相对格式 1 字节 */
+	else if (vpf == 0x03) p += 14;		/* 绝对格式 7 字节 */
+
+	let udl = byteAt(h, p / 2); p += 2;
+	let ud = hex2bytes(substr(h, p));
+
+	let text;
+	if ((dcs & 0x0c) == 0x08) {
+		text = '';
+		for (let i = 0; i + 1 < length(ud); i += 2)
+			text += utf8((ud[i] << 8) | ud[i + 1]);
+	}
+	else {
+		text = gsm7Decode(ud, 0);
+	}
+
+	return { smsc: smsc, fo: fo, mr: mr, to: da.value, dcs: dcs, udl: udl, body: text };
+}
+
+export { decodePdu, joinConcat, encodeSubmit, decodeSubmit };
+
