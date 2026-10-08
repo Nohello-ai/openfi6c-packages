@@ -1,0 +1,115 @@
+#!/bin/sh
+#
+# openfi-sms —— OpenFi 6C 短信后端
+#
+#   openfi-sms list              列出 SIM 上的短信（JSON）
+#   openfi-sms mark <idx>        把某条标记为已读（AT+CMGR 的副作用）
+#   openfi-sms delete <idx>      从 SIM 删除某条
+#   openfi-sms sent              本地发件箱（自己发出去的，SIM 上不留）
+#   openfi-sms send <号码> <内容> 发送（见文件末尾说明）
+#
+# AT 那套（端口探测、收发、**串口互斥锁**）全部复用 luci-app-openfi-modem
+# 的 /usr/lib/openfi-modem/at.sh —— 两个包共用同一把锁，
+# 否则你在短信页刷新时，模组信息页正好也在查，两条指令会互相插话。
+#
+# 为什么要读一次 SIM 就够：SIM 卡能存 50 条，短信本来就在卡上，
+# 不需要本地再存一份镜像。只有「发件箱」要本地存 —— 因为发出去的短信
+# 模组不一定保留。已读/未读直接用 SIM 上的状态位。
+
+[ -n "${OPENFI_SMS_LIB:-}" ] || OPENFI_SMS_LIB=/usr/lib/openfi-sms
+[ -n "${OPENFI_SMS_AT:-}" ] || OPENFI_SMS_AT=/usr/lib/openfi-modem/at.sh
+SENT_FILE="${OPENFI_SMS_SENT:-/etc/openfi-sms/sent.json}"
+RUNDIR="${OPENFI_SMS_RUNDIR:-/var/run}"
+
+# shellcheck source=/dev/null
+. "$OPENFI_SMS_AT"
+
+json_escape() {
+	printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\n\r'
+}
+
+# 一行 JSON 错误（前端统一按 {"error": "..."} 处理）
+json_err() {
+	printf '{"error":"%s"}\n' "$(json_escape "$1")"
+	exit 0
+}
+
+# 把 AT 的原始输出交给 ucode 解码成 JSON
+#   $1 = AT 原始文本
+decode_raw() {
+	local tmp out
+	tmp="$RUNDIR/openfi-sms-raw.$$"
+	: > "$tmp" || json_err tmp_failed
+	printf '%s\n' "$1" > "$tmp"
+
+	out="$(ucode -L "$OPENFI_SMS_LIB" "$OPENFI_SMS_LIB/decode.uc" "$tmp" 2>&1)"
+	rm -f "$tmp"
+
+	case "$out" in
+		'{'*) printf '%s\n' "$out" ;;
+		*) json_err "decode_failed: $(printf '%s' "$out" | head -c 120)" ;;
+	esac
+}
+
+# ------------------------------------------------------------------ list
+do_list() {
+	local raw
+	omod_open || json_err "${AT_ERR:-open_failed}"
+	raw="$(omod_query 'AT+CMGL=4')"
+	omod_close
+
+	decode_raw "$raw"
+}
+
+# ------------------------------------------------------------------ mark
+# AT+CMGR 会把该条在 SIM 上的状态置为「已读」，这就是我们要的副作用。
+# 内容前端已经有了（list 里带来了完整正文），这里不重复解析。
+do_mark() {
+	local idx="$1"
+	[ -n "$idx" ] || json_err "missing_index"
+	case "$idx" in *[!0-9]*) json_err "bad_index" ;; esac
+
+	omod_open || json_err "${AT_ERR:-open_failed}"
+	omod_query "AT+CMGR=$idx" >/dev/null 2>&1
+	omod_close
+	printf '{"ok":true,"idx":%s}\n' "$idx"
+}
+
+# ------------------------------------------------------------------ delete
+do_delete() {
+	local idx="$1"
+	[ -n "$idx" ] || json_err "missing_index"
+	case "$idx" in *[!0-9]*) json_err "bad_index" ;; esac
+
+	omod_open || json_err "${AT_ERR:-open_failed}"
+	omod_query "AT+CMGD=$idx" >/dev/null 2>&1
+	omod_close
+	printf '{"ok":true,"idx":%s}\n' "$idx"
+}
+
+# ------------------------------------------------------------------ sent
+do_sent() {
+	if [ ! -f "$SENT_FILE" ]; then
+		printf '{"messages":[],"error":""}\n'
+		return
+	fi
+	cat "$SENT_FILE"
+}
+
+# ------------------------------------------------------------------ send
+# 需要 PDU 编码（当前模组是 +CMGF:0 PDU 模式），而且**会真的发出去**
+# —— 真机测试要花钱/占额度，所以单独一步做，不在这里草率实现。
+do_send() {
+	json_err "not_implemented_yet"
+}
+
+# ------------------------------------------------------------------ 入口
+case "${1:-list}" in
+	list)   do_list ;;
+	mark)   do_mark "$2" ;;
+	delete) do_delete "$2" ;;
+	sent)   do_sent ;;
+	send)   do_send "$2" "$3" ;;
+	--lib)  : ;;			# 给单元测试 source 用，不执行动作
+	*)      json_err "unknown_action" ;;
+esac

@@ -1,0 +1,7 @@
+config sms 'sms'
+	# 列表每页显示多少条（0 = 不分页，一次全给）
+	option page_size '50'
+	# 打开某条时是否把它标记为已读（会发一次 AT+CMGR，SIM 上状态随之改变）
+	option mark_read_on_open '1'
+	# 列表里每行显示多少字符后截断（前端也会按宽度截，这只是个上限）
+	option preview_chars '120'

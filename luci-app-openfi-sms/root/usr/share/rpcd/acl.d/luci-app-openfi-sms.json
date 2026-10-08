@@ -1,0 +1,22 @@
+{
+	"luci-app-openfi-sms": {
+		"description": "Grant access to OpenFi 6C SMS: list, view, send, delete",
+
+		"read": {
+			"ubus": {
+				"file": [ "exec" ]
+			},
+			"file": {
+				"/usr/sbin/openfi-sms": [ "exec" ]
+			},
+			"uci": [ "openfi_sms" ]
+		},
+
+		"write": {
+			"ubus": {
+				"file": [ "exec" ]
+			},
+			"uci": [ "openfi_sms" ]
+		}
+	}
+}

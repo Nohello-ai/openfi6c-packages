@@ -13,7 +13,7 @@
 #
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PDU="$HERE/../luci-app-openfi-modem/root/usr/lib/openfi-modem/pdu.uc"
+PDU="$HERE/../luci-app-openfi-sms/root/usr/lib/openfi-sms/pdu.uc"
 FIX="$HERE/fixtures/pdus-real.txt"
 FAIL=0
 ok()  { printf '  ✅ %s\n' "$1"; }
