@@ -8,18 +8,6 @@ config switch 'switch'
 	# 部分固件/模组切完卡要重启才会真正驻网，默认关，页面上有单独按钮。
 	option restart_after_switch '0'
 
-config view 'view'
-	# 页面自动刷新间隔（秒）
-	option poll '15'
-
-config signal 'signal'
-	# 采样开关
-	option enabled '1'
-	# 采样间隔（秒）
-	option interval '60'
-	# 环缓冲保留多少条（288 × 60 秒 ≈ 4.8 小时）
-	option keep '288'
-
 config signal 'signal'
 	# 采样开关
 	option enabled '1'

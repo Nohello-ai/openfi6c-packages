@@ -92,6 +92,19 @@ ICCID 与 IMSI 是能定位到卡和用户的标识。页面只在本机显示�
   > （MTK 平台实测就没有 `interface` 文件，只有 `bInterfaceClass` 等），
   > 所以实际生效的通常就是最后的 `ttyUSB3..0` 兜底顺序。
   > OpenFi 6C 上实测 **ttyUSB3 就是正确的 AT 口**。
+- **流量统计只认 WAN 口的计数器**：`openfi-modem-link` 取的是
+  `uci get network.wan.device`（= `usb0`）的 `statistics/rx_bytes`，
+  **这是准的**。
+  > 实测踩过的坑：开了 HNAT 硬件加速之后，**局域网侧网卡**（`br-lan`）的
+  > `statistics` 会**少算很多** —— HNAT 把转发流量直接硬件转发掉，不经过
+  > 内核网络栈，网卡层软件计数器根本看不到。实测同一时刻
+  > `usb0 rx = 2.48 GB` 而 `br-lan rx+tx` 只有 `631 MB`，差 4 倍。
+  > 所以：**要算总流量就用 WAN 口（usb0）的计数器**，别用 br-lan。
+  >
+  > 单个客户端的用量则是走 conntrack：`nf_conntrack_acct=1` 已开，
+  > 且 MTK 的 HNAT 驱动（`hnat_nf_hook.c` 的 keepalive）会把硬件计数
+  > **回写**到 conntrack 和 iptables 的计数器里，所以基于
+  > `/proc/net/nf_conntrack` 的统计是准的。
 
 ## 文件
 
