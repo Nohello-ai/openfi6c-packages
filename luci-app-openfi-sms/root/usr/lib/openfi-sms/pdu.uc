@@ -235,8 +235,18 @@ function decodePdu(pduHex) {
 		udh: udh
 	};
 
-	/* 拼接短信：UDH = 05 00 03 <ref> <total> <seq> */
-	if (udh && length(udh) >= 5 && udh[1] == 0x00) {
+	/*
+	 * 拼接短信：UDH = 05 00 03 <ref> <total> <seq>
+	 *            │  │  │
+	 *            │  │  └ IE 数据长度
+	 *            │  └──── IEI（0x00 = 拼接）
+	 *            └─────── UDH 总长度（这一字节已经在上面的 udhLen 里剥掉了）
+	 * 所以 udh[] 的内容是 [IEI, IE长度, ref, total, seq]：
+	 * 【坑15】判断 IEI 要看 udh[0]，不是 udh[1]。
+	 *   写成 udh[1] == 0x00 的话永远不成立（那里是 IE 长度 0x03），
+	 *   结果是长短信从不归组、parts 永远为空 —— 而且不报任何错。
+	 */
+	if (udh && length(udh) >= 5 && udh[0] == 0x00) {
 		r.concat = { ref: udh[2], total: udh[3], seq: udh[4] };
 	}
 
