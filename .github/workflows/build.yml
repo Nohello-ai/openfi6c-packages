@@ -153,9 +153,15 @@ jobs:
         working-directory: work
         run: |
           # 顺序有讲究:modem 先编(sms 依赖它)
-          make -j"$(nproc)" package/luci-app-openfi-modem/compile V=s
-          make -j"$(nproc)" package/luci-app-openfi-fan/compile V=s
-          make -j"$(nproc)" package/luci-app-openfi-sms/compile V=s
+          # 编译失败的原始输出会被 GitHub 藏进日志，而日志接口需要登录才能读。
+          # 所以这里把最后 40 行吐成 ::error:: —— 它会出现在 check 注解里，
+          # 未登录也能通过 API 读出来，省得每次都靠猜。
+          for p in luci-app-openfi-modem luci-app-openfi-fan luci-app-openfi-sms; do
+            if ! make -j"$(nproc)" "package/$p/compile" V=s 2>&1 | tail -60; then
+              echo "::error::编译 $p 失败"
+              exit 1
+            fi
+          done
 
       - name: 收集产物
         run: |

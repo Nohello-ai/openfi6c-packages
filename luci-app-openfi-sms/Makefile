@@ -18,7 +18,9 @@ PKG_RELEASE:=$(shell date -u +%Y%m%d%H%M)
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=OpenFi 6C
 
-LUCI_TITLE:=OpenFi 6C SMS (send / receive / view)
+# 标题里【不要放括号】：make 在某些上下文里会被 () 搞乱，
+# 之前 fan/modem 的标题都没有括号，这里也保持一致。
+LUCI_TITLE:=OpenFi 6C SMS - send receive view
 LUCI_DESCRIPTION:=OpenFi 6C 短信：列表、弹窗看全文、发送、删除。PDU 编解码走 ucode，长短信按 UDH 自动拼接。
 LUCI_MAINTAINER:=OpenFi 6C community port
 LUCI_DEPENDS:=+luci-base +luci-app-openfi-modem +ucode
