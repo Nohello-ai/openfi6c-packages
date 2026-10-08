@@ -213,11 +213,19 @@ return view.extend({
 			'id': 'openfi-sms-list',
 			'style': 'max-height:60vh; overflow-y:auto; -webkit-overflow-scrolling:touch;'
 		});
-		var meta = E('div', { 'class': 'cbi-section-descr' });
+		var meta = E('div', { 'class': 'cbi-section-descr', 'style': 'flex:1;' });
+		var stamp = E('span', { 'class': 'cbi-section-descr' }, '');
+		var btn = E('button', {
+			'class': 'btn cbi-button',
+			'style': 'flex:none;',
+			'click': function () { return self.refresh(true); }
+		}, _('刷新'));
 
 		var container = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('短信')),
-			meta,
+			E('div', {
+				'style': 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;'
+			}, [ meta, stamp, btn ]),
 			E('div', { 'class': 'cbi-section' }, [ listBox ]),
 			this.renderCompose()
 		]);
@@ -243,8 +251,24 @@ return view.extend({
 				listBox.appendChild(self.renderRow(msgs[i]));
 		};
 
-		this.refresh = function () {
-			return call('list', []).then(function (d) { self.fill(d); });
+		/* manual=true 表示用户点的按钮：期间按钮置灰，避免连点 */
+		this.refresh = function (manual) {
+			if (manual) {
+				btn.disabled = true;
+				btn.textContent = _('刷新中…');
+			}
+			return call('list', []).then(function (d) {
+				self.fill(d);
+				stamp.textContent = _('更新于 %s').format(
+					new Date().toTimeString().slice(0, 8));
+			}).catch(function () {
+				/* 失败也要把按钮恢复，否则页面就卡在“刷新中”了 */
+			}).then(function () {
+				if (manual) {
+					btn.disabled = false;
+					btn.textContent = _('刷新');
+				}
+			});
 		};
 
 		this.fill(data || {});
