@@ -151,3 +151,47 @@ openfi-modem-switch restart  # 软重启模块
   本插件不会去改模块的 USB 模式，也不负责拨号。
 - `AT+QTEMP` / `AT+QRSRP` / `AT+QNWINFO` 是移远（含展锐平台）的私有指令，
   换其它厂商模组时这几项会为空，其余字段仍可用。
+
+## USB 数据模式自动探测（openfi-usbmode）
+
+模组的 `usbnet` 模式决定"模组怎么把数据交给 CPU"，速度和结构差别很大：
+
+| 模式 | 值 | 速度 | 内部 NAT | 说明 |
+|---|---|---|---|---|
+| **MBIM** | 2 | ⭐⭐⭐ | **无** | 主机直接拿运营商 IP，少一跳，理论上最好 |
+| **NCM** | 5 | ⭐⭐⭐ | 有 | 多包聚合，比 RNDIS 快一档 |
+| **RNDIS** | 3 | ⭐ | 有 | 兼容性最好、速度最差（模组默认） |
+
+开机时按 **MBIM → NCM → RNDIS** 逐个试，哪个**真的拿到 IP 并且 ping 得通**就用哪个，
+结果记在 `/etc/openfi-usbmode`，以后开机直接用（不再折腾）。
+
+**为什么不用 RMNET/QMI**：RM500U-CN 是展锐平台，RMNET/QMI 是高通那套原生模式，
+在这颗芯片上基本没实现 —— 试它们只会白白多几次 USB 重新枚举。
+
+### 安全设计
+
+这块出错就没网，所以：
+
+* **RNDIS 兜底** —— 全失败时回到和出厂完全一样的状态
+* **只有真通才算成功** —— 网卡出现不算（没插卡/欠费/模组假死时网卡照样在、IP 也照样有）
+* **最多切 6 次** —— 防止在几个模式之间来回死循环
+* **驱动不在就跳过** —— 不浪费一次重新枚举
+* **结果持久化** —— 只在成功时写，之后开机秒过
+
+### 控制
+
+```sh
+uci set openfi_modem.usbmode.mode='off'   # 关掉探测，保持现状
+uci set openfi_modem.usbmode.mode='5'     # 钉死 NCM
+uci set openfi_modem.usbmode.mode='auto'  # 恢复自动（默认）
+uci commit openfi_modem
+
+openfi-usbmode show     # 看上次探明了什么
+openfi-usbmode reset    # 清掉记录，下次开机会重新探测
+```
+
+### 注意
+
+* 切换模式会让模组**重新枚举**（USB 拔插一次），WAN 断十几秒
+* **首次开机**可能要试两三次，最长一两分钟 —— 只发生一次，之后就快了
+* 需要固件带 `cdc_ncm` / `cdc_mbim` 驱动 + `umbim`（defconfig 已含）
