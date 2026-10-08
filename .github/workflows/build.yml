@@ -129,12 +129,13 @@ jobs:
         run: |
           D="$(TZ=Asia/Shanghai date +%Y%m%d%H%M)"
           sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$D/" \
-            luci-app-openfi-modem/Makefile luci-app-openfi-fan/Makefile
+            luci-app-openfi-modem/Makefile luci-app-openfi-fan/Makefile \
+            luci-app-openfi-sms/Makefile
           grep -H -E '^PKG_(NAME|VERSION|RELEASE)' luci-app-openfi-*/Makefile
 
       - name: 放入我们的包
         run: |
-          cp -a luci-app-openfi-modem luci-app-openfi-fan work/package/
+          cp -a luci-app-openfi-modem luci-app-openfi-fan luci-app-openfi-sms work/package/
           ls -d work/package/luci-app-openfi-*
 
       - name: 选包
@@ -143,14 +144,18 @@ jobs:
           cat >> .config <<'EOF'
           CONFIG_PACKAGE_luci-app-openfi-modem=m
           CONFIG_PACKAGE_luci-app-openfi-fan=m
+          # sms 依赖 modem(共用串口锁),必须一起编
+          CONFIG_PACKAGE_luci-app-openfi-sms=m
           EOF
           make defconfig
 
       - name: 编译
         working-directory: work
         run: |
+          # 顺序有讲究:modem 先编(sms 依赖它)
           make -j"$(nproc)" package/luci-app-openfi-modem/compile V=s
           make -j"$(nproc)" package/luci-app-openfi-fan/compile V=s
+          make -j"$(nproc)" package/luci-app-openfi-sms/compile V=s
 
       - name: 收集产物
         run: |
@@ -213,6 +218,7 @@ jobs:
             | `.apk` | OpenWrt / ImmortalWrt **25.12 及更新** | apk-tools 3 | `apk add --allow-untrusted ./xxx.apk` |
 
             - **`luci-app-openfi-modem`** —— 移动网络：模组信息与卡槽 / 信号与流量 / AT 终端
+            - **`luci-app-openfi-sms`** —— 短信：列表与弹窗看全文 / 发送 / 删除（依赖 modem，共用串口锁）
             - **`luci-app-openfi-fan`** —— 散热与灯光：风扇控制 / 状态灯
 
             两个包都是 `Architecture: all`，跟 CPU 架构无关，装完刷新 LuCI 即可看到菜单。
