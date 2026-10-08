@@ -21,6 +21,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 结构一致性 + AT 串口互斥测试。
+  # 不需要 SDK、不需要真设备，几十秒就跑完 —— 但能挡住几类【运行期不报错、
+  # 只会静默失效】的问题：配置段重复、ACL 漏授权脚本、菜单指向不存在的视图、
+  # 脚本丢了执行位、JSON/JS 语法错、以及 6 个调用者抢同一根串口。
+  test:
+    name: 结构一致性 + AT 锁测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 跑测试
+        run: sh tests/run.sh
   build:
     name: ${{ matrix.release }} → ${{ matrix.fmt }}
     runs-on: ubuntu-latest
@@ -164,7 +176,8 @@ jobs:
 
   release:
     name: 发布（按时间）
-    needs: build
+    # 测试不过就不发版（test 只要几十秒，不会拖慢 build）
+    needs: [build, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

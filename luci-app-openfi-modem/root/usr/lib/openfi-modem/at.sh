@@ -21,6 +21,22 @@ AT_PORT=""
 AT_BAUD=""
 AT_ERR=""
 
+# ── 串口互斥（重要）─────────────────────────────────────────
+# 一共 6 个脚本会碰这根串口：info / link / signal / switch / at(网页终端)。
+# 不加锁的话，你在网页 AT 终端敲指令时，信号守护进程正好轮询，
+# 两个进程同时写 /dev/ttyUSB3 → 指令互相插话、回复串台。
+# 这里用文件锁串行化，omod_open 拿锁、进程退出自动放锁。
+#
+# 优先 flock：锁挂在 fd 上，进程无论怎么退出（含被 kill -9）内核都会释放。
+#   注意语义：是「最后一个持有该 fd 的进程退出」才释放 —— 子进程会继承 fd，
+#   所以极短时间内子进程（timeout 2 cat 这种，本来就几秒退）还活着时锁不放开，
+#   这是正常的、也是对的：那会儿串口确实还在被用。
+# 没有 flock 就退化成 mkdir 原子锁 + PID 存活检查 + 陈旧锁清理。
+OPENFI_AT_LOCK=${OPENFI_AT_LOCK:-/var/run/openfi-at.lock}
+OPENFI_AT_LOCK_WAIT=${OPENFI_AT_LOCK_WAIT:-12}
+AT_LOCK_FD=9
+AT_LOCK_MODE=""
+
 # ------------------------------------------------------------------ 小工具
 omod_uci() {
 	uci -q get "$1" 2>/dev/null
@@ -28,6 +44,66 @@ omod_uci() {
 
 omod_json_escape() {
 	printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\n\r'
+}
+
+# ------------------------------------------------------------------ 串口锁
+omod_lock() {
+	local i=0 p
+
+	# 已经在锁里就不再重复加（同一个 shell 里连续多次 omod_open 的情况）
+	[ -n "$AT_LOCK_MODE" ] && return 0
+
+	if command -v flock >/dev/null 2>&1; then
+		eval "exec $AT_LOCK_FD>\"\$OPENFI_AT_LOCK\"" 2>/dev/null || {
+			AT_LOCK_MODE=""
+			return 0			# 连锁文件都开不了：不阻断功能，照旧收发
+		}
+		while [ "$i" -lt "$OPENFI_AT_LOCK_WAIT" ]; do
+			if flock -n -x "$AT_LOCK_FD" 2>/dev/null; then
+				AT_LOCK_MODE="flock"
+				return 0
+			fi
+			sleep 1
+			i=$((i + 1))
+		done
+		eval "exec $AT_LOCK_FD>&-" 2>/dev/null
+		AT_LOCK_MODE=""
+		return 1
+	fi
+
+	# 退化路径：mkdir 是原子的
+	while [ "$i" -lt "$OPENFI_AT_LOCK_WAIT" ]; do
+		if mkdir "$OPENFI_AT_LOCK.d" 2>/dev/null; then
+			echo $$ > "$OPENFI_AT_LOCK.d/pid"
+			AT_LOCK_MODE="mkdir"
+			return 0
+		fi
+		# 持有人已经死了 → 清掉陈旧锁
+		if [ -r "$OPENFI_AT_LOCK.d/pid" ]; then
+			p="$(cat "$OPENFI_AT_LOCK.d/pid" 2>/dev/null)"
+			if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+				rm -rf "$OPENFI_AT_LOCK.d" 2>/dev/null
+				continue
+			fi
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+	AT_LOCK_MODE=""
+	return 1
+}
+
+omod_unlock() {
+	case "$AT_LOCK_MODE" in
+		mkdir)
+			rm -rf "$OPENFI_AT_LOCK.d" 2>/dev/null
+			;;
+		flock)
+			eval "exec $AT_LOCK_FD>&-" 2>/dev/null
+			;;
+	esac
+	AT_LOCK_MODE=""
+	return 0
 }
 
 # ------------------------------------------------------------------ 找 AT 口
@@ -60,12 +136,19 @@ omod_find_port() {
 }
 
 # ------------------------------------------------------------------ 打开串口
+# 注意：这里会先抢串口锁（见上面的 omod_lock）。抢不到就返回 busy，
+# 让调用方报错而不是冲进去和别的进程抢串口。
 omod_open() {
 	AT_ERR=""
 
 	AT_PORT="${1:-$(omod_find_port)}"
 	if [ -z "$AT_PORT" ] || [ ! -c "$AT_PORT" ]; then
 		AT_ERR="no_at_port"
+		return 1
+	fi
+
+	if ! omod_lock; then
+		AT_ERR="busy"
 		return 1
 	fi
 
@@ -93,6 +176,9 @@ omod_open() {
 }
 
 omod_close() {
+	# 放掉串口锁。即使调用方忘了调，flock 也会在进程退出时自动释放；
+	# mkdir 那条路径靠 PID 存活检查兜底，不会把串口锁死。
+	omod_unlock
 	return 0
 }
 
