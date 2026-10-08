@@ -37,3 +37,17 @@ define Package/luci-app-openfi-sms/conffiles
 endef
 
 include $(TOPDIR)/feeds/luci/luci.mk
+
+# call BuildPackage - OpenWrt buildroot signature
+#
+# 【这一行不能删】它看着像句废话，其实是 OpenWrt feed 扫描器的识别标记：
+#   include/scan.mk 建索引时执行的是
+#       find ... -name Makefile | xargs grep -aHE 'call (BuildPackage|KernelPackage|...)'
+#   也就是说【只有 Makefile 里出现 "call BuildPackage" 这个字符串，这个目录才被当成包】。
+#   连注释里的都算 —— fan 和 modem 的 Makefile 结尾都有这一行，SMS 当初漏了。
+#
+# 漏掉的后果非常隐蔽：
+#   · 包 CI 是直接 cp 进 package/ 编译的，不走扫描器 → 【能过】
+#   · 固件 CI 是通过 feed 拉的，必须过扫描器 → 【扫不到 → 装不上 → 配置符号变未知
+#     → make defconfig 丢掉 → 断言失败】
+#   两边行为不一致，所以排查了很久。
