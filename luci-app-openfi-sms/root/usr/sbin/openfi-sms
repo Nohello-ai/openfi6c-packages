@@ -19,7 +19,6 @@
 [ -n "${OPENFI_SMS_LIB:-}" ] || OPENFI_SMS_LIB=/usr/lib/openfi-sms
 [ -n "${OPENFI_SMS_AT:-}" ] || OPENFI_SMS_AT=/usr/lib/openfi-modem/at.sh
 SENT_FILE="${OPENFI_SMS_SENT:-/etc/openfi-sms/sent.json}"
-CACHE_FILE="${OPENFI_SMS_CACHE:-$RUNDIR/openfi-sms.json}"
 RUNDIR="${OPENFI_SMS_RUNDIR:-/var/run}"
 
 # shellcheck source=/dev/null
@@ -53,24 +52,8 @@ decode_raw() {
 }
 
 # ------------------------------------------------------------------ list
-# 优先用后台守护(openfi-smsd)缓存好的结果 —— 那是一次纯文件读，不碰串口。
-# 缓存没有 / 太旧 / 守护没起来时，自己读一次兜底（慢一点但不会白屏）。
 do_list() {
-	local raw ts now maxage refresh
-
-	if [ -s "$CACHE_FILE" ]; then
-		ts="$(sed -n 's/^{"ts":\([0-9]*\).*/\1/p' "$CACHE_FILE" 2>/dev/null | head -1)"
-		refresh="$(uci -q get openfi_sms.sms.refresh 2>/dev/null)"
-		case "$refresh" in ''|*[!0-9]*) refresh=30 ;; esac
-		maxage=$(( refresh * 2 ))
-		now="$(date +%s)"
-		if [ -n "$ts" ] && [ "$((now - ts))" -le "$maxage" ]; then
-			cat "$CACHE_FILE"
-			return
-		fi
-	fi
-
-	# 兜底：自己读一次
+	local raw
 	omod_open || json_err "${AT_ERR:-open_failed}"
 	raw="$(omod_query 'AT+CMGL=4')"
 	omod_close
@@ -89,7 +72,6 @@ do_mark() {
 	omod_open || json_err "${AT_ERR:-open_failed}"
 	omod_query "AT+CMGR=$idx" >/dev/null 2>&1
 	omod_close
-	rm -f "$CACHE_FILE"		# 状态变了，让缓存失效
 	printf '{"ok":true,"idx":%s}\n' "$idx"
 }
 
@@ -102,7 +84,6 @@ do_delete() {
 	omod_open || json_err "${AT_ERR:-open_failed}"
 	omod_query "AT+CMGD=$idx" >/dev/null 2>&1
 	omod_close
-	rm -f "$CACHE_FILE"		# SIM 内容变了，让缓存失效
 	printf '{"ok":true,"idx":%s}\n' "$idx"
 }
 
@@ -150,7 +131,6 @@ do_send() {
 	if [ "$rc" -ne 0 ]; then
 		json_err "send_failed: $(printf '%s' "$resp" | tr -d '\r' | head -c 160)"
 	fi
-	rm -f "$CACHE_FILE"		# 发出去的短信也可能进 SIM，让缓存失效
 
 	# 记进本地发件箱（SIM 上不一定留）
 	printf '{"ok":true,"to":"%s","chars":%s}\n' \

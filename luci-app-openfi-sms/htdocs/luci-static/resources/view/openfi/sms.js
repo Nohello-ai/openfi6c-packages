@@ -13,12 +13,7 @@
  *  · 点某一行 → 弹窗（ui.showModal）看完整内容，不跳页面
  *  · 下面是发送区：收件人 + 内容 + 发送
  *
- * 数据全来自 /usr/sbin/openfi-sms list。
- *   后台守护 openfi-smsd 每 refresh 秒读一次 SIM 并缓存，
- *   list 优先返回缓存（纯文件读，不碰串口），所以这个页面可以刷得很快：
- *     · 打开页面瞬间就有数据（用后台已经缓存好的）
- *     · 看着的时候默认每 5 秒刷新一次
- *   缓存过期或守护没起来时，list 会自己读一次 SIM 兜底。
+ * 数据全来自 /usr/sbin/openfi-sms list（只读一次 SIM 卡，SIM 上本来就在）。
  * 布局只用 LuCI 标准 class，不写死颜色，跟随主题（aurora / bootstrap 都好看）。
  *
  * 手机适配的几个点：
@@ -31,7 +26,7 @@
 var CMD = '/usr/sbin/openfi-sms';
 
 /* 默认值；真实值从 uci openfi_sms 读（见 load） */
-var POLL_SECS = 5;
+var POLL_SECS = 30;
 var MARK_READ = 1;
 
 function confInt(name, dflt) {
@@ -68,7 +63,7 @@ function call(action, args) {
 return view.extend({
 	load: function () {
 		return uci.load('openfi_sms').then(function () {
-			POLL_SECS = confInt('poll', 5);
+			POLL_SECS = confInt('poll', 30);
 			MARK_READ  = confInt('mark_read_on_open', 1);
 			return call('list', []);
 		});
@@ -253,8 +248,7 @@ return view.extend({
 		};
 
 		this.fill(data || {});
-		/* 下限 2 秒：这一步只是读缓存文件（不碰串口），可以快一点 */
-		if (POLL_SECS < 2) POLL_SECS = 2;
+		if (POLL_SECS < 5) POLL_SECS = 5;
 		if (POLL_SECS > 600) POLL_SECS = 600;
 		poll.add(function () { return self.refresh(); }, POLL_SECS);
 
