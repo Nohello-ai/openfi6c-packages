@@ -34,11 +34,15 @@ function confInt(name, dflt) {
 	return isNaN(v) ? dflt : v;
 }
 
-function esc(s) {
-	return String(s == null ? '' : s)
-		.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;');
-}
+/*
+ * 关于文本转义（原来这里是 esc()，已删除）：
+ *   E() 的第三个参数是【数组】时，数组里的字符串走 document.createTextNode()，
+ *   原样当文本显示；而传【单个字符串】时走 node.innerHTML，会被当 HTML 解析。
+ *   号码/正文/后端报错都是外部数据，所以这里统一用「数组包一层」：
+ *     · 不再先 esc() 成实体再交给 E()（那在按文本节点处理的实现里会双重转义，
+ *       页面显示出 &amp; 这种字面量）；
+ *     · 也不会让正文里的 <b>/<img> 之类被 innerHTML 当成标签解析。
+ */
 
 /* "2026-09-25 18:19:06 UTC+08:00" → "09-25 18:19" */
 function shortTime(t) {
@@ -74,11 +78,11 @@ return view.extend({
 		var self = this;
 		var body = E('div', { 'class': 'cbi-section' }, [
 			E('div', { 'class': 'cbi-section-descr' },
-				esc(m.sender) + '　' + esc(m.time || '')),
+				[ m.sender || '', '　', m.time || '' ]),
 			E('div', {
 				'style': 'white-space:pre-wrap; word-break:break-word; ' +
 					'max-height:50vh; overflow-y:auto; padding:8px 0;'
-			}, m.body || '')
+			}, [ m.body || '' ])
 		]);
 
 		if (m.parts)
@@ -96,7 +100,7 @@ return view.extend({
 				'click': function () {
 					return call('delete', [ m.idx ]).then(function (r) {
 						ui.hideModal();
-						if (r.error) ui.addNotification(null, E('p', {}, r.error), 'error');
+						if (r.error) ui.addNotification(null, E('p', {}, [ r.error ]), 'error');
 						else self.refresh();
 					});
 				}
@@ -117,7 +121,7 @@ return view.extend({
 
 		if (m.error)
 			return E('div', { 'class': 'cbi-section-descr' },
-				_('第 %s 条解析失败：%s').format(m.idx, m.error));
+				[ _('第 %s 条解析失败：%s').format(m.idx, m.error) ]);
 
 		return E('div', {
 			'style': 'padding:10px 6px; border-bottom:1px solid rgba(128,128,128,.25); ' +
@@ -127,7 +131,7 @@ return view.extend({
 			E('div', { 'style': 'display:flex; align-items:baseline; gap:8px;' }, [
 				E('strong', {
 					'style': 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'
-				}, esc(m.sender)),
+				}, [ m.sender || '' ]),
 				E('span', { 'class': 'cbi-section-descr', 'style': 'flex:none;' },
 					shortTime(m.time)),
 				m.unread ? E('span', {
@@ -140,7 +144,7 @@ return view.extend({
 				'style': 'margin-top:4px; opacity:.85; ' +
 					'display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; ' +
 					'overflow:hidden; word-break:break-word;'
-			}, esc(m.body))
+			}, [ m.body || '' ])
 		]);
 	},
 
@@ -163,8 +167,8 @@ return view.extend({
 			if (!msg) { ui.addNotification(null, E('p', {}, _('请填内容')), 'warning'); return; }
 
 			ui.showModal(_('确认发送'), [
-				E('p', {}, _('发给 %s：').format(num)),
-				E('p', { 'style': 'word-break:break-word;' }, msg),
+				E('p', {}, [ _('发给 %s：').format(num) ]),
+				E('p', { 'style': 'word-break:break-word;' }, [ msg ]),
 				E('div', { 'class': 'right' }, [
 					E('button', { 'class': 'btn', 'click': ui.hideModal }, _('取消')),
 					' ',
@@ -174,7 +178,7 @@ return view.extend({
 							return call('send', [ num, msg ]).then(function (r) {
 								ui.hideModal();
 								if (r.error)
-									ui.addNotification(null, E('p', {}, _('发送失败：') + r.error), 'error');
+									ui.addNotification(null, E('p', {}, [ _('发送失败：') + r.error ]), 'error');
 								else {
 									ui.addNotification(null, E('p', {}, _('已发送')), 'info');
 									text.value = '';

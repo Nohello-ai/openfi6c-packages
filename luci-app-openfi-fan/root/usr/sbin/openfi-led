@@ -42,8 +42,8 @@ fi
 
 num() {
 	case "$1" in
-		''|*[!0-9-]*) echo null ;;
-		*) echo "$1" ;;
+		''|*[!0-9-]*) echo null; return ;;
+		*) case "$1" in *[0-9]) echo "$1" ;; *) echo null ;; esac ;;
 	esac
 }
 

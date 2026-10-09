@@ -16,8 +16,8 @@ PERIOD_NS=40000
 
 num() {
 	case "$1" in
-		''|*[!0-9-]*) echo null ;;
-		*) echo "$1" ;;
+		''|*[!0-9-]*) echo null; return ;;
+		*) case "$1" in *[0-9]) echo "$1" ;; *) echo null ;; esac ;;
 	esac
 }
 
@@ -61,6 +61,8 @@ for ch in 0 1; do
 		# 反极性：duty 0 = 全速
 		if [ -n "$duty" ] && [ -n "$per" ] && [ "$per" -gt 0 ] 2>/dev/null; then
 			speed=$((100 - (duty * 100 / per)))
+			[ "$speed" -lt 0 ] && speed=0
+			[ "$speed" -gt 100 ] && speed=100
 		else
 			speed=null
 		fi

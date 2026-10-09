@@ -1,6 +1,6 @@
 name: build-packages
 
-# 两个包都是 Architecture: all（纯 shell + JS + JSON，没有 C 代码），
+# 三个包都是 Architecture: all（纯 shell + JS + JSON，没有 C 代码），
 # 所以只需要 SDK 的打包能力，不需要编译工具链 —— 一轮几分钟就能出包。
 #
 #   ipk  → OpenWrt/ImmortalWrt 24.10 及更早（opkg）
@@ -224,7 +224,7 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: OpenFi 6C packages ${{ steps.ver.outputs.tag }}
           body: |
-            OpenFi 6C 的两个 LuCI 包，一次出两种包格式：
+            OpenFi 6C 的三个 LuCI 包，一次出两种包格式：
 
             | 文件后缀 | 适用固件 | 包管理器 | 装法 |
             | --- | --- | --- | --- |
@@ -235,7 +235,7 @@ jobs:
             - **`luci-app-openfi-sms`** —— 短信：列表与弹窗看全文 / 发送 / 删除（依赖 modem，共用串口锁）
             - **`luci-app-openfi-fan`** —— 散热与灯光：风扇控制 / 状态灯
 
-            两个包都是 `Architecture: all`，跟 CPU 架构无关，装完刷新 LuCI 即可看到菜单。
+            三个包都是 `Architecture: all`，跟 CPU 架构无关，装完刷新 LuCI 即可看到菜单。
             各文件的 MD5 见 `MD5SUMS.txt`。
           files: dist/*
           generate_release_notes: true

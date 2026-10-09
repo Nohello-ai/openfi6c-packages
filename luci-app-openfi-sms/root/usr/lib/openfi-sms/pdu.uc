@@ -58,12 +58,66 @@ function byteAt(h, i) {
 }
 
 /*
+ * GSM 03.38 默认字母表：GSM 7bit 值（0x00..0x7F）→ Unicode 码点。
+ * 存【码点】而不是照抄字符：ucode 的字符串是 UTF-8 字节流，
+ * 表里混进 è/Ø/Δ/€ 这类多字节字符后 substr(...,i,1) 会按字节切、索引全乱。
+ * 【坑2b】0x1B 是「扩展转义」标记，本身不产出字符，见 GSM7_EXT。
+ */
+let GSM7_BASIC = [
+/* 00 */	0x0040, 0x00A3, 0x0024, 0x00A5, 0x00E8, 0x00E9, 0x00F9, 0x00EC,
+/* 08 */	0x00F2, 0x00C7, 0x000A, 0x00D8, 0x00F8, 0x000D, 0x00C5, 0x00E5,
+/* 10 */	0x0394, 0x005F, 0x03A6, 0x0393, 0x039B, 0x03A9, 0x03A0, 0x03A8,
+/* 18 */	0x03A3, 0x0398, 0x039E, 0x001B, 0x00C6, 0x00E6, 0x00DF, 0x00C9,
+/* 20 */	0x0020, 0x0021, 0x0022, 0x0023, 0x00A4, 0x0025, 0x0026, 0x0027,
+/* 28 */	0x0028, 0x0029, 0x002A, 0x002B, 0x002C, 0x002D, 0x002E, 0x002F,
+/* 30 */	0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035, 0x0036, 0x0037,
+/* 38 */	0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F,
+/* 40 */	0x00A1, 0x0041, 0x0042, 0x0043, 0x0044, 0x0045, 0x0046, 0x0047,
+/* 48 */	0x0048, 0x0049, 0x004A, 0x004B, 0x004C, 0x004D, 0x004E, 0x004F,
+/* 50 */	0x0050, 0x0051, 0x0052, 0x0053, 0x0054, 0x0055, 0x0056, 0x0057,
+/* 58 */	0x0058, 0x0059, 0x005A, 0x00C4, 0x00D6, 0x00D1, 0x00DC, 0x00A7,
+/* 60 */	0x00BF, 0x0061, 0x0062, 0x0063, 0x0064, 0x0065, 0x0066, 0x0067,
+/* 68 */	0x0068, 0x0069, 0x006A, 0x006B, 0x006C, 0x006D, 0x006E, 0x006F,
+/* 70 */	0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077,
+/* 78 */	0x0078, 0x0079, 0x007A, 0x00E4, 0x00F6, 0x00F1, 0x00FC, 0x00E0
+];
+
+/* GSM 03.38 扩展表（0x1B 后面的那个 septet）→ Unicode 码点 */
+let GSM7_EXT = [
+	[ 0x0A, 0x000C ],	/* 换页 */
+	[ 0x14, 0x005E ],	/* ^ */
+	[ 0x28, 0x007B ],	/* { */
+	[ 0x29, 0x007D ],	/* } */
+	[ 0x2F, 0x005C ],	/* \ */
+	[ 0x3C, 0x005B ],	/* [ */
+	[ 0x3D, 0x007E ],	/* ~ */
+	[ 0x3E, 0x005D ],	/* ] */
+	[ 0x40, 0x007C ],	/* | */
+	[ 0x65, 0x20AC ]	/* € */
+];
+
+function gsm7Ext(v) {
+	for (let i = 0; i < length(GSM7_EXT); i++)
+		if (GSM7_EXT[i][0] == v)
+			return GSM7_EXT[i][1];
+	return null;			/* 未定义的转义：按不可解释丢弃 */
+}
+
+/*
  * GSM 7bit 解包
  * 【坑2】每 7 位一个字符，而且位序是「低位在前」（LSB-first）
  * 【坑3】带 UDH 时正文前面有填充位，必须按 septet 边界对齐，否则整条歪掉
  *   septets：从这个 septet 序号开始取（UDH 占掉的 septet 数）
+ *   count：正文一共多少个 septet（= UDL），null = 有多少解多少。
+ *     【坑2c】7bit 打包末尾会有 0~7 个填充位（凑整到字节）。填充位够 7 个时
+ *     会多出「一个全是 0 的 septet」，按 0x00 解出来就是多一个 '@'
+ *     （以前 chr(0) 会多一个 NUL，正文长度是 7 的倍数+1 时必现，比如 15 个字符）。
+ *     所以调用方要把 UDL 传进来，按它截断。
+ * 【坑2d】不能 chr(v) 当 ASCII：GSM 的 0x00 是 '@'、0x11 是 '_'、0x24 是 '¤'、
+ *   0x5B 是 'Ä'……还有 0x1B 扩展转义（€、{}、[]、\、~、|、^、换页）。
+ *   必须过 GSM7_BASIC / GSM7_EXT 两张表，再用 utf8() 出字节。
  */
-function gsm7Decode(bytes, septetSkip) {
+function gsm7Decode(bytes, septetSkip, count) {
 	let bits = '';
 	for (let i = 0; i < length(bytes); i++) {
 		let b = bytes[i];
@@ -73,13 +127,38 @@ function gsm7Decode(bytes, septetSkip) {
 	bits = substr(bits, septetSkip * 7);
 
 	let out = '';
-	for (let i = 0; i + 7 <= length(bits); i += 7) {
+	let i = 0, used = 0;
+	while (i + 7 <= length(bits)) {
+		if (count != null && used >= count)
+			break;
+
 		let v = 0;
 		for (let k = 0; k < 7; k++)
 			if (substr(bits, i + k, 1) == '1')
 				v |= (1 << k);
-		out += chr(v);
+		i += 7; used++;
+
+		if (v != 0x1B) {
+			out += utf8(GSM7_BASIC[v]);
+			continue;
+		}
+
+		/* 0x1B = 扩展转义：真正的字符在【下一个】 septet 里；
+		 * 落在末尾的孤立 0x1B 没有字符可解，丢掉。 */
+		if ((count != null && used >= count) || i + 7 > length(bits))
+			break;
+
+		let e = 0;
+		for (let k = 0; k < 7; k++)
+			if (substr(bits, i + k, 1) == '1')
+				e |= (1 << k);
+		i += 7; used++;
+
+		let cp = gsm7Ext(e);
+		if (cp != null)
+			out += utf8(cp);
 	}
+
 	return out;
 }
 
@@ -124,10 +203,17 @@ function parseScts(h) {
 	let yy = int(substr(d, 0, 2));
 	let year = (yy < 70) ? (2000 + yy) : (1900 + yy);
 
-	/* 时区：有符号 BCD，单位 15 分钟 */
-	let tz = int(substr(d, 12, 2));	/* 【坑8】时区是 BCD 十进制，不是十六进制 */
-	let sign = (tz & 0x80) ? '-' : '+';
-	tz &= 0x7f;
+	/*
+	 * 时区：BCD 十进制，单位 15 分钟，编码成两个数字 + 一个符号位。
+	 * 【坑8】两个数字是 BCD（十进制），不能拿去当十六进制用。
+	 * 【坑8b】符号位是【第一个数字】的 bit3（即那个字符 >= '8' 表示西半球/负），
+	 *   不是整个字节的 bit7。对十进制 BCD 值做 & 0x80 永远不成立 ——
+	 *   东半球（比如 +08:00 = BCD "32"）看着是对的，负时区才露馅。
+	 *   数值 = (第一个数字 & 0x07) * 10 + 第二个数字。
+	 */
+	let tzs = substr(d, 12, 2);
+	let sign = (substr(tzs, 0, 1) >= '8') ? '-' : '+';
+	let tz = (hx(substr(tzs, 0, 1)) & 0x07) * 10 + hx(substr(tzs, 1, 1));
 	let tzh = int(tz / 4);
 	let tzm = (tz % 4) * 15;
 
@@ -213,10 +299,21 @@ function decodePdu(pduHex) {
 		enc = 'UCS2';
 	}
 	else if (dcsClass == 0x00) {	/* GSM 7bit */
+		/*
+		 * 【坑3b】带 UDH 时，正文从【整个 UD 字段】的第
+		 *   ceil((udhLen + 1) * 8 / 7) 个 septet 开始 —— UDH 是字节对齐的，
+		 *   后面还要填几个 bit 才对齐到 septet 边界。
+		 *   所以不能「先把 UDH 那几个字节切掉、再按 septet 跳」：那是两个坐标系，
+		 *   48 bit 的 UDH 按 7bit 算是 7 个 septet，按 8bit 切只等于 6 个字节。
+		 *   以前正是这么写的 → GSM7 的多段长短信每段都会整体错位
+		 *   （UCS2 不受影响，所以夹具里的拼接短信看着是好的）。
+		 */
 		let skip = 0;
 		if (udhi)
 			skip = int((((udhLen + 1) * 8) + 6) / 7);	/* 【坑3】向上取整 */
-		body = gsm7Decode(payload, skip);
+		/* UDL 是 septet 总数（含 UDH 占掉的），末尾填充位不算正文 */
+		let bodySeptets = (udl > skip) ? (udl - skip) : null;
+		body = gsm7Decode(ud, skip, bodySeptets);
 		enc = 'GSM7';
 	}
 	else {
@@ -421,23 +518,40 @@ function decodeSubmit(pduHex) {
 	let pid = byteAt(h, p / 2); p += 2;
 	let dcs = byteAt(h, p / 2); p += 2;
 
-	/* 有有效期时（TP-VPF != 0）要跳过对应字节数 */
+	/*
+	 * 有有效期时（TP-VPF != 0）要跳过对应字节数 —— TS 23.040 9.2.3.12：
+	 *   01 = 相对格式：1 字节
+	 *   10 = 增强格式：7 字节
+	 *   11 = 绝对格式：7 字节
+	 * 【坑16】以前 10/11 两句的字节数和注释都是错位的：增强格式只跳了 1 字节，
+	 *   解析外部 SUBMIT（模组读回自己发的短信、或别的实现发的）会整体错位。
+	 *   VPF 只出现在 SMS-SUBMIT 里，所以自家 VPF=0 的路径测不出来。
+	 */
 	let vpf = (fo >> 3) & 0x03;
-	if (vpf == 0x01) p += 2;		/* 增强格式 7 字节，极少用，先不处理 */
-	else if (vpf == 0x02) p += 2;		/* 相对格式 1 字节 */
-	else if (vpf == 0x03) p += 14;		/* 绝对格式 7 字节 */
+	if (vpf == 0x01) p += 2;		/* 相对格式：1 字节 */
+	else if (vpf == 0x02) p += 14;		/* 增强格式：7 字节 */
+	else if (vpf == 0x03) p += 14;		/* 绝对格式：7 字节 */
 
 	let udl = byteAt(h, p / 2); p += 2;
 	let ud = hex2bytes(substr(h, p));
 
+	/* 带 UDH 时（TP-UDHI），UD 开头是「UDH 长度字节 + UDH」，正文在后面。
+	 * 和 decodePdu 一样：GSM7 要按 septet 坐标系跳，UCS2 按字节跳。 */
+	let udhi = (fo & 0x40) ? true : false;
+
 	let text;
 	if ((dcs & 0x0c) == 0x08) {
+		let start = (udhi && length(ud) > 0) ? (1 + ud[0]) : 0;
 		text = '';
-		for (let i = 0; i + 1 < length(ud); i += 2)
+		for (let i = start; i + 1 < length(ud); i += 2)
 			text += utf8((ud[i] << 8) | ud[i + 1]);
 	}
 	else {
-		text = gsm7Decode(ud, 0);
+		/* GSM7 时 UDL 是 septet 数（含 UDH 占掉的），末尾填充位不是字符 */
+		let skip = 0;
+		if (udhi && length(ud) > 0)
+			skip = int((((ud[0] + 1) * 8) + 6) / 7);
+		text = gsm7Decode(ud, skip, (udl > skip) ? (udl - skip) : null);
 	}
 
 	return { smsc: smsc, fo: fo, mr: mr, to: da.value, dcs: dcs, udl: udl, body: text };

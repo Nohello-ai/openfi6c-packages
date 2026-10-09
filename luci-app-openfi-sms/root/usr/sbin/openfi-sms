@@ -6,7 +6,7 @@
 #   openfi-sms mark <idx>        把某条标记为已读（AT+CMGR 的副作用）
 #   openfi-sms delete <idx>      从 SIM 删除某条
 #   openfi-sms sent              本地发件箱（自己发出去的，SIM 上不留）
-#   openfi-sms send <号码> <内容> 发送（见文件末尾说明）
+#   openfi-sms send <号码> <内容> 发送（PDU 编码，成功后追加进本地发件箱）
 #
 # AT 那套（端口探测、收发、**串口互斥锁**）全部复用 luci-app-openfi-modem
 # 的 /usr/lib/openfi-modem/at.sh —— 两个包共用同一把锁，
@@ -88,19 +88,40 @@ do_delete() {
 }
 
 # ------------------------------------------------------------------ sent
+# $SENT_FILE 是 JSONL：一行一条记录（见 do_send）。这里把它拼成前端要的
+# {"messages":[...],"error":""} —— 对外结构不变；文件不存在/为空时是空数组，
+# 页面按「还没发过短信」显示，不是错误。
 do_sent() {
+	local line body
+
 	if [ ! -f "$SENT_FILE" ]; then
 		printf '{"messages":[],"error":""}\n'
 		return
 	fi
-	cat "$SENT_FILE"
+
+	body=''
+	while IFS= read -r line || [ -n "$line" ]; do
+		line="$(printf '%s' "$line" | tr -d '\r')"
+		# 去掉行首/行尾空白（手改过的文件也不至于把 JSON 带崩）
+		line="${line#"${line%%[![:space:]]*}"}"
+		line="${line%"${line##*[![:space:]]}"}"
+		# 只收「一个完整 JSON 对象」；坏行跳过，别让整次请求变成非法 JSON
+		case "$line" in
+			'{'*'}') body="${body:+$body,}$line" ;;
+			*)       continue ;;
+		esac
+	done < "$SENT_FILE"
+
+	printf '{"messages":[%s],"error":""}\n' "$body"
 }
 
 # ------------------------------------------------------------------ send
-# 需要 PDU 编码（当前模组是 +CMGF:0 PDU 模式），而且**会真的发出去**
-# —— 真机测试要花钱/占额度，所以单独一步做，不在这里草率实现。
+# 需要 PDU 编码（当前模组是 +CMGF:0 PDU 模式）：encode.uc 编出 SMS-SUBMIT，
+# 再用 AT+CMGS=<八位组数> 把 PDU 发出去（AT 层是 at.sh 的 omod_send_pdu）。
+# 成功之后追加一条记录到 $SENT_FILE —— 发出去的短信模组不一定留在 SIM 上，
+# 本地发件箱就是这条链路的落点（见 do_sent）。
 do_send() {
-	local num="$1" text="$2" tf enc pdu octets resp rc
+	local num="$1" text="$2" tf enc pdu octets resp rc chars now sentdir
 
 	[ -n "$num" ] || json_err "missing_number"
 	[ -n "$text" ] || json_err "missing_text"
@@ -132,9 +153,20 @@ do_send() {
 		json_err "send_failed: $(printf '%s' "$resp" | tr -d '\r' | head -c 160)"
 	fi
 
-	# 记进本地发件箱（SIM 上不一定留）
-	printf '{"ok":true,"to":"%s","chars":%s}\n' \
-		"$(json_escape "$num")" "$(printf '%s' "$enc" | sed -n 's/.*"chars":\([0-9]*\).*/\1/p')"
+	chars="$(printf '%s' "$enc" | sed -n 's/.*"chars":\([0-9]*\).*/\1/p')"
+	[ -n "$chars" ] || chars=0
+
+	# 记进本地发件箱（SIM 上不一定留）。JSONL：一行一条、只追加，
+	# 不用读-改-写，两条短信挨着发也不会互相覆盖。
+	now="$(date +%s 2>/dev/null)"
+	[ -n "$now" ] || now=0
+	sentdir="${SENT_FILE%/*}"
+	[ "$sentdir" != "$SENT_FILE" ] || sentdir=.	# 没有目录部分（相对路径）
+	mkdir -p "$sentdir" 2>/dev/null
+	printf '{"to":"%s","chars":%s,"t":%s}\n' \
+		"$(json_escape "$num")" "$chars" "$now" >> "$SENT_FILE" 2>/dev/null
+
+	printf '{"ok":true,"to":"%s","chars":%s}\n' "$(json_escape "$num")" "$chars"
 }
 
 # ------------------------------------------------------------------ 入口

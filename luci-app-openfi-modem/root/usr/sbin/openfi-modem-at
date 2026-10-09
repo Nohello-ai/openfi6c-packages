@@ -42,7 +42,7 @@ case "$(printf '%s' "$CMD" | tr 'a-z' 'A-Z' | tr -d ' ')" in
 	*QDOWNLOAD*)         BLOCKED='进入下载模式（会失联）' ;;
 	*QFOTADL*|*QUPDATE*) BLOCKED='触发固件升级（失败即变砖）' ;;
 	*QRST*|*QPRTPARA*)   BLOCKED='恢复出厂参数（会丢模组配置）' ;;
-	*QEFS*|*'EFS'*)      BLOCKED='操作 EFS（会丢校准数据）' ;;
+	*QEFS*|*'QCFG="EFS"'*) BLOCKED='操作 EFS（会丢校准数据）' ;;
 	*'AT&F'*)            BLOCKED='恢复出厂设置（会丢模组配置）' ;;
 esac
 
@@ -60,9 +60,6 @@ fi
 REPLY="$(omod_query "$CMD")"
 omod_close
 
-case "$REPLY" in
-	*ERROR*|*'NO CARRIER'*)
-		json_out true "$REPLY" ""
-		;;
-	*) json_out true "$REPLY" "" ;;
-esac
+# AT 已执行：无论回显是 OK 还是 ERROR / NO CARRIER，都算执行成功，
+# 错误信息体现在 reply 文本里（原先两个分支做的事完全一样，合并掉）。
+json_out true "$REPLY" ""

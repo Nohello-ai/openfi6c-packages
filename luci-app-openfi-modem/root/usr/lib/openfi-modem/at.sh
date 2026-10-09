@@ -188,11 +188,11 @@ omod_write() {
 }
 
 # 累积读：每轮 timeout 2 秒兜底，串口空闲 0.5 秒 cat 就返回；
-# 连续读到空就认为收完了，最多 8 轮。
+# 连续读到空就认为收完了，轮数上限只是防死循环，放宽到 32（多指令批量回复会被拆成多段，太小会静默截断）。
 omod_read() {
 	local out="" chunk i=0
 
-	while [ "$i" -lt 8 ]; do
+	while [ "$i" -lt 32 ]; do
 		chunk="$(timeout 2 cat "$AT_PORT" 2>/dev/null)"
 		[ -n "$chunk" ] || break
 		out="${out}${chunk}

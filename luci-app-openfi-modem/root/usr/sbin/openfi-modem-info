@@ -111,7 +111,8 @@ IMSI="$(omod_sec "$RAW" 'AT+CIMI' | tr -d '\r' | grep -E '^[0-9]{14,16}$' | head
 # 网络注册状态：优先 EPS(CEREG)，退回 CS(CREG)
 # 0 未注册 1 已注册(本地) 2 搜索中 3 拒绝 4 未知 5 已注册(漫游)
 reg_code() {
-	printf '%s\n' "$RAW" | tr -d '\r' | grep -E "\+$1:" | head -1 | sed 's/.*,//' | tr -dc '0-9'
+	# 注册状态是第二个字段；用最后一个逗号会取到 AcT/原因码（实测显示成 "7"）。
+	printf '%s\n' "$RAW" | tr -d '\r' | grep -E "\+$1:" | head -1 | sed 's/^[^,]*,//; s/,.*//' | tr -dc '0-9'
 }
 reg_text() {
 	case "$1" in
