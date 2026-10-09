@@ -489,7 +489,7 @@ function encodeSubmit(number, text) {
 
 	return {
 		pdu: '00' + tpdu,			/* 前面加 SMSC 长度 0 */
-		tpdu_octets: length(tpdu) / 2
+		tpdu_octets: length(tpdu) / 2, chars: length(cps)
 	};
 }
 

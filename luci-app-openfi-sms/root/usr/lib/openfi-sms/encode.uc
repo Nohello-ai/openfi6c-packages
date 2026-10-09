@@ -50,4 +50,4 @@ if (e.error) {
 	exit(1);
 }
 
-print('{"pdu":"' + e.pdu + '","octets":' + e.tpdu_octets + ',"chars":' + length(text) + '}');
+print('{"pdu":"' + e.pdu + '","octets":' + e.tpdu_octets + ',"chars":' + (e.chars || 0) + '}');

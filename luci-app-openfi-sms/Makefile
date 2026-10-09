@@ -13,7 +13,7 @@ include $(INCLUDE_DIR)/package.mk
 
 PKG_NAME:=luci-app-openfi-sms
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=$(shell date -u +%Y%m%d%H%M)
+PKG_RELEASE:=1
 
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=OpenFi 6C
@@ -23,7 +23,7 @@ PKG_MAINTAINER:=OpenFi 6C
 LUCI_TITLE:=OpenFi 6C SMS - send receive view
 LUCI_DESCRIPTION:=OpenFi 6C 短信：列表、弹窗看全文、发送、删除。PDU 编解码走 ucode，长短信按 UDH 自动拼接。
 LUCI_MAINTAINER:=OpenFi 6C community port
-LUCI_DEPENDS:=+luci-base +luci-app-openfi-modem +ucode
+LUCI_DEPENDS:=+luci-base +luci-app-openfi-modem +ucode +ucode-mod-fs
 LUCI_PKGARCH:=all
 
 # 和 luci-app-openfi-modem 一样关掉 jsmin。

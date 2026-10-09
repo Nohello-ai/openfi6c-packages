@@ -91,25 +91,27 @@ do_sample() {
 }
 
 do_query() {
-	count=0
-	[ -f "$LOGFILE" ] && count="$(wc -l < "$LOGFILE" 2>/dev/null)"
-	case "$count" in ''|*[!0-9]*) count=0 ;; esac
+	local snap cnt
+	# 一次性快照：避免和采样进程 mv 覆写抢到半截文件
+	snap="$(cat "$LOGFILE" 2>/dev/null)"
+	cnt=0
+	[ -n "$snap" ] && cnt="$(printf '%s\n' "$snap" | wc -l)"
+	case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
 
 	printf '{"interval":%s,"keep":%s,"count":%s,"file":"%s","samples":[' \
-		"$(get_interval)" "$(get_keep)" "$count" "$(omod_json_escape "$LOGFILE")"
+		"$(get_interval)" "$(get_keep)" "$cnt" "$(omod_json_escape "$LOGFILE")"
 
-	if [ -f "$LOGFILE" ]; then
-		awk -F'|' '
-			NF >= 4 {
-				t  = ($1 ~ /^[0-9]+$/) ? $1 : "null"
-				c  = ($2 ~ /^[0-9]+$/) ? $2 : "null"
-				d  = ($3 ~ /^-?[0-9]+$/) ? $3 : "null"
-				r  = ($4 ~ /^-?[0-9]+$/) ? $4 : "null"
-				printf "%s{\"t\":%s,\"csq\":%s,\"dbm\":%s,\"rsrp\":%s,\"network\":\"%s\"}",
-					(n++ ? "," : ""), t, c, d, r, $5
-			}
-		' "$LOGFILE"
-	fi
+	[ -n "$snap" ] && printf '%s\n' "$snap" | awk -F'|' '
+		NF >= 4 {
+			t  = ($1 ~ /^[0-9]+$/) ? $1 : "null"
+			c  = ($2 ~ /^[0-9]+$/) ? $2 : "null"
+			d  = ($3 ~ /^-?[0-9]+$/) ? $3 : "null"
+			r  = ($4 ~ /^-?[0-9]+$/) ? $4 : "null"
+			nw = $5; gsub(/["\\]/, "", nw)
+			printf "%s{\"t\":%s,\"csq\":%s,\"dbm\":%s,\"rsrp\":%s,\"network\":\"%s\"}",
+				(n++ ? "," : ""), t, c, d, r, nw
+		}
+	'
 
 	printf ']}\n'
 }

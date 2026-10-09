@@ -28,7 +28,7 @@ LUCI_TITLE:=LuCI app for OpenFi 6C 5G modem info and SIM slot switch
 #   （`stty -F` → not found；`busybox timeout` → applet not found），
 #   缺了就会报 stty_failed / 读不到数据，模组页一片空白。
 #   走 coreutils 而不改 busybox 配置，是为了让这个包在任何固件上都能装得上。
-LUCI_DEPENDS:=+kmod-usb-serial-option +kmod-usb-serial-wwan +jsonfilter +coreutils-stty +coreutils-timeout
+LUCI_DEPENDS:=+kmod-usb-serial-option +kmod-usb-serial-wwan +jsonfilter +coreutils-stty +coreutils-timeout +flock
 LUCI_PKGARCH:=all
 LUCI_DESCRIPTION:=OpenFi 6C 5G 模组：信息/卡槽切换、信号历史与流量、AT 终端。
 

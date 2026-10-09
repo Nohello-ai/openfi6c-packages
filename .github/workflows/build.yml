@@ -68,16 +68,35 @@ jobs:
         id: sdk
         run: |
           set -e
-          BASE="https://downloads.immortalwrt.org/releases/${{ matrix.release }}/targets/mediatek/filogic/"
-          FILE=$(curl -fsSL "$BASE" | grep -oE 'immortalwrt-sdk-[^"<>]*Linux-x86_64\.tar\.(zst|xz)' | head -1)
+          REQ="${{ matrix.release }}"
+          # 优先用写死的版本；万一上游把它下架了，回退到同系列最新补丁号，
+          # 而不是直接 ::error:: 让整轮 build 挂掉。
+          pick() {
+            b="https://downloads.immortalwrt.org/releases/$1/targets/mediatek/filogic/"
+            f="$(curl -fsSL "$b" 2>/dev/null | grep -oE 'immortalwrt-sdk-[^"<>]*Linux-x86_64[.]tar[.](zst|xz)' | head -1 || true)"
+            if [ -n "$f" ]; then echo "$1"; fi
+          }
+          REL="$(pick "$REQ")"
+          if [ -z "$REL" ]; then
+            SERIES="${REQ%.*}"
+            LATEST="$(curl -fsSL https://downloads.immortalwrt.org/releases/ 2>/dev/null | grep -oE "${SERIES}[.][0-9]+" | sort -V -u | tail -1 || true)"
+            echo "::warning::$REQ 的 SDK 不存在，回退到同系列最新：$LATEST"
+            if [ -n "$LATEST" ]; then REL="$(pick "$LATEST")"; fi
+          fi
+          if [ -z "$REL" ]; then
+            echo "::error::$REQ 及其同系列都没有可用 SDK"
+            exit 1
+          fi
+          BASE="https://downloads.immortalwrt.org/releases/$REL/targets/mediatek/filogic/"
+          FILE="$(curl -fsSL "$BASE" | grep -oE 'immortalwrt-sdk-[^"<>]*Linux-x86_64[.]tar[.](zst|xz)' | head -1)"
           if [ -z "$FILE" ]; then
             echo "::error::$BASE 里没找到 SDK"
             exit 1
           fi
+          echo "SDK 版本 = $REL"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "file=$FILE" >> "$GITHUB_OUTPUT"
           echo "SDK = $FILE"
-
       - name: 缓存 SDK + feeds
         uses: actions/cache@v4
         with:

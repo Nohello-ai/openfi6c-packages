@@ -78,6 +78,7 @@ case "$ACTION" in
 	if [ "$OUT_OK" = "1" ] && [ "$(omod_uci openfi_modem.switch.restart_after_switch)" = "1" ]; then
 		# 发完就走，不等回复：CFUN=1,1 之后 AT 口会重新枚举
 		omod_write 'AT+CFUN=1,1'
+		omod_close
 		sleep 1
 	fi
 
@@ -92,6 +93,7 @@ restart)
 	fi
 
 	omod_write 'AT+CFUN=1,1'
+	omod_close
 	sleep 1
 	omod_close
 
