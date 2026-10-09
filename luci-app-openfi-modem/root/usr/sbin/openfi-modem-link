@@ -39,12 +39,36 @@ jarray() {
 DEV="$(uci -q get network.wan.device 2>/dev/null)"
 [ -n "$DEV" ] || DEV="$(uci -q get network.wan.ifname 2>/dev/null)"
 
-if [ -z "$DEV" ] || [ ! -d "/sys/class/net/$DEV" ]; then
+# proto mbim 时 uci 里写的是【字符设备 /dev/cdc-wdmN】，不是网卡名。
+# 那种值拿去 /sys/class/net 下面找必然找不到，得当成"没拿到"处理。
+case "$DEV" in
+	/dev/*) DEV="" ;;
+esac
+
+# 允许覆盖 sysfs 根目录，好让回归测试能用一棵假树验证"按驱动找网卡"
+SYSFS_NET="${OPENFI_SYSFS_NET:-/sys/class/net}"
+
+if [ -z "$DEV" ] || [ ! -d "$SYSFS_NET/$DEV" ]; then
 	# 模组的 USB 数据模式决定网卡名，几种模式的命名不一样：
-	#   RNDIS / ECM  → usb0
+	#   RNDIS / ECM      → usb0
 	#   NCM / MBIM / QMI → wwan0
-	# 所以这里不能只找 usb*，否则把模组切成 NCM 之后就永远探测不到了。
-	DEV="$(ls /sys/class/net 2>/dev/null | grep -E '^(usb|wwan|eth)[0-9]+$' | head -1)"
+	#
+	# 【不能靠名字猜】。这台机器上 /sys/class/net 里同时有
+	# eth0（gmac0，一条没接线的 2.5G 固定链路）和 eth1（LAN），
+	# 用 `ls | grep -E '^(usb|wwan|eth)' | head -1` 会选中 eth0，
+	# 于是流量统计读到的是那个永远零流量的口。
+	#
+	# 正确做法：按【驱动】找 —— 只有模组的这几个 usbnet 驱动
+	# 才会创建蜂窝数据网卡。
+	DEV=""
+	for _d in "$SYSFS_NET"/*; do
+		_n="${_d##*/}"
+		_drv="$(basename "$(readlink -f "$_d/device/driver" 2>/dev/null)" 2>/dev/null)"
+		case "$_drv" in
+			rndis_host|cdc_ncm|cdc_ether|cdc_mbim|qmi_wwan)
+				DEV="$_n"; break ;;
+		esac
+	done
 fi
 [ -n "$DEV" ] || DEV="usb0"
 
@@ -65,8 +89,8 @@ case "$UP" in
 esac
 
 # ---------------------------------------------------------------- 流量
-RX="$(cat "/sys/class/net/$DEV/statistics/rx_bytes" 2>/dev/null)"
-TX="$(cat "/sys/class/net/$DEV/statistics/tx_bytes" 2>/dev/null)"
+RX="$(cat "$SYSFS_NET/$DEV/statistics/rx_bytes" 2>/dev/null)"
+TX="$(cat "$SYSFS_NET/$DEV/statistics/tx_bytes" 2>/dev/null)"
 T="$(date +%s)"
 
 printf '{'
